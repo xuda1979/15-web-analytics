@@ -127,7 +127,10 @@ All settings are environment variables:
 Run `npm run privacy-audit` or open `/api/audit`. The report covers the data
 flow (browser → collector → SQLite → dashboard/export), retention posture,
 schema, and per-check status (cookies / personal fields / raw-IP storage /
-snippet size / region granularity / storage locality).
+snippet size / region granularity / storage locality). The raw-IP-storage
+check gates on the live `events` table, not just the config flag: if any
+event still carries a cleartext IP under `WA_STORE_IP=0` it fails, citing the
+leftover rows.
 
 ## Tests
 

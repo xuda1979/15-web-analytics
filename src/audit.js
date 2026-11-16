@@ -44,6 +44,33 @@ export function snippetSizeCheck(byteCount, publicDir) {
   };
 }
 
+// The ip_not_stored gate, factored out of the report so every branch is
+// testable without booting the server. The status follows the live database,
+// not just the config flag: `storeIp` enables cleartext storage, but rows with
+// a non-NULL ip can also pre-exist under storeIp=0 (legacy WA_STORE_IP=1 runs,
+// seeds, or manual edits) — and the "Raw IP addresses are never stored" claim
+// must not be issued against a database that still holds them. `ipRows` is the
+// report-time count of events with a stored ip, `totalEvents` the events count
+// used to state the scanned population.
+export function ipStoreCheck(storeIp, ipRows, totalEvents) {
+  if (storeIp) {
+    return {
+      status: 'warn',
+      detail: `WA_STORE_IP=1 is enabled: cleartext IP is stored in the events.ip column (${ipRows} of ${totalEvents} events carry one). Disable for a stricter posture.`,
+    };
+  }
+  if (ipRows > 0) {
+    return {
+      status: 'fail',
+      detail: `${ipRows} of ${totalEvents} events still carry a cleartext IP row under WA_STORE_IP=0 — left behind by an earlier WA_STORE_IP=1 run or a manual edit. Only the salted HMAC guest key should be persisted; delete the legacy rows (or re-create the database) so the no-storage claim holds against the live data.`,
+    };
+  }
+  return {
+    status: 'pass',
+    detail: `The events table was scanned at report time: 0 of ${totalEvents} events carry a cleartext IP — raw IP addresses are never stored, only the salted HMAC guest key is persisted.`,
+  };
+}
+
 function fmtBytes(n) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
@@ -228,10 +255,7 @@ export function generateAudit(db) {
     {
       id: 'ip_not_stored',
       label: 'Raw IP storage',
-      status: config.storeIp ? 'warn' : 'pass',
-      detail: config.storeIp
-        ? 'WA_STORE_IP=1 is enabled: cleartext IP is stored in the events.ip column. Disable for a stricter posture.'
-        : 'Raw IP addresses are never stored. Only the salted HMAC guest key is persisted.',
+      ...ipStoreCheck(config.storeIp, Number(ipEvents), Number(stats.events)),
     },
     {
       id: 'snippet_size',
