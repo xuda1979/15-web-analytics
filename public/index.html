@@ -57,6 +57,7 @@
   </div>
   <div class="grid">
     <div class="card"><h3>Devices</h3><div id="devices"></div></div>
+    <div class="card"><h3>Device models</h3><div id="models"></div></div>
     <div class="card"><h3>Browsers</h3><div id="browsers"></div></div>
   </div>
   <div class="grid">
@@ -237,6 +238,7 @@
         bars('titles', data.titles, 'title', 'visits');
         bars('referrers', data.referrers, 'referrer', 'visits');
         bars('devices', data.devices, 'device', 'visits');
+        bars('models', data.models, 'model', 'visits');
         bars('browsers', (data.browsers || []).map(function (b) {
           return { browser: b.version ? b.browser + ' ' + b.version : b.browser, visits: b.visits, uniques: b.uniques };
         }), 'browser', 'visits');

@@ -47,6 +47,7 @@ export function normalizeEvent(payload, meta, secret) {
     browser: parsed.browser,
     browser_version: parsed.browserVersion,
     device: parsed.device,
+    device_model: parsed.deviceModel,
     os: parsed.os,
     is_bot: isBot(ua) ? 1 : 0,
   };
@@ -112,8 +113,8 @@ export function insertEvent(db, event) {
     INSERT INTO events
       (ts, visited_at, guest_key, ip, ua, path, referrer, ref_domain,
        title, screen_w, screen_h, lang, country, browser, browser_version,
-       device, os, is_bot, visit_key, entry_path, exit_path)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       device, device_model, os, is_bot, visit_key, entry_path, exit_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   // node:sqlite refuses to bind `undefined`; use NULL for absent optionals.
   const bind = (v) => (v === undefined ? null : v);
@@ -134,6 +135,7 @@ export function insertEvent(db, event) {
     event.browser,
     bind(event.browser_version),
     event.device,
+    bind(event.device_model),
     event.os,
     event.is_bot,
     bind(visitKey),

@@ -16,6 +16,7 @@ const EVENT_SQL_ADD = [
   'visit_key INTEGER',
   'entry_path TEXT',
   'exit_path TEXT',
+  'device_model TEXT',
 ];
 
 function migrate(db) {

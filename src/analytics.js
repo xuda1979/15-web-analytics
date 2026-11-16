@@ -136,6 +136,23 @@ export function topDevices(db, startMs, endMs, limit = 10) {
   return topQuery(db, 'device', 'device', startMs, endMs, limit);
 }
 
+// device_model is parsed from the UA and is '' for desktop/unknown agents, so
+// it is excluded when absent — same guard policy as countries, languages, and
+// screens. Model-less traffic still counts toward totals.
+export function topModels(db, startMs, endMs, limit = 10) {
+  const w = whereClause(startMs, endMs);
+  return db
+    .prepare(
+      `SELECT device_model AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ${w.sql} AND is_bot = 0 AND device_model IS NOT NULL AND device_model != ''
+       GROUP BY device_model ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(...w.args, limit)
+    .map((r) => ({ model: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
+}
+
 // The stored browser_version column has no other read path; attach the
 // dominant (most frequent, ties broken lexicographically) version to each
 // browser so the breakdown is actually useful ("Chrome 120" vs "Chrome 121").
@@ -515,6 +532,20 @@ export function topSourcesFiltered(db, startMs, endMs, limit, fq) {
 
 export function topDevicesFiltered(db, startMs, endMs, limit, fq) {
   return topQueryFiltered(db, 'device', 'device', startMs, endMs, limit, fq);
+}
+
+export function topModelsFiltered(db, startMs, endMs, limit, fq) {
+  return db
+    .prepare(
+      `SELECT device_model AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}
+         AND device_model IS NOT NULL AND device_model != ''
+       GROUP BY device_model ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(startMs, endMs, ...fq.args, limit)
+    .map((r) => ({ model: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
 }
 
 export function topBrowsersFiltered(db, startMs, endMs, limit, fq) {

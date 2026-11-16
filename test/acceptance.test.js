@@ -405,6 +405,50 @@ test('screen sizes are reported in overview, summary, and raw export', async () 
   assert.equal(row.screen_h, 1440, 'raw export carries screen_h');
 });
 
+test('device models are reported in overview, summary, and raw export', async () => {
+  // device_model is parsed from the UA (ua-parser-js device.model): the mobile
+  // Android UA carries "Pixel 8", while the desktop Chrome UA parses to ''.
+  await request('POST', '/api/collect', pageview({ path: '/model/pixel' }), {
+    'user-agent': UA_MOBILE_ANDROID,
+    'x-forwarded-for': uniqueIp(910),
+  });
+  await wait(5);
+  await request('POST', '/api/collect', pageview({ path: '/model/desktop' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(911),
+  });
+
+  const json = (await request('GET', '/api/overview')).json();
+  assert.ok(Array.isArray(json.models), 'overview must return a models array');
+  const pixel = json.models.find((m) => m.model === 'Pixel 8');
+  assert.ok(pixel && pixel.visits >= 1, 'Pixel 8 should be present in models');
+
+  // Desktop UAs carry no model; they must not produce a null/empty breakdown
+  // row — same exclusion policy as countries/languages/screens/titles.
+  assert.ok(
+    !json.models.some((m) => m.model === null || m.model === 'null' || m.model === ''),
+    'models must not carry a null/empty label',
+  );
+
+  // Filtered view keeps the dimension inside the filtered scope.
+  const f = (await request('GET', '/api/overview?days=30&source=%28direct%29')).json();
+  assert.ok(Array.isArray(f.models), 'models stays a list under filters');
+  assert.ok(
+    !f.models.some((m) => m.model === null || m.model === 'null' || m.model === ''),
+    'filtered models must not carry a null/empty label',
+  );
+
+  // Summary export carries the device models dimension.
+  const summary = (await request('GET', '/api/export?days=30&format=json&summary=1')).json();
+  assert.ok(Array.isArray(summary.models) && summary.models.length >= 1);
+
+  // Raw JSON export carries the per-event device_model column.
+  const rows = (await request('GET', '/api/export?days=30&format=json')).json();
+  const row = rows.find((r) => r.path === '/model/pixel');
+  assert.ok(row, 'pixel event exported');
+  assert.equal(row.device_model, 'Pixel 8', 'raw export carries device_model');
+});
+
 test('activity by hour of day: full 24h axis summing to totals', async () => {
   const base = (await request('GET', '/api/overview')).json().totals;
 

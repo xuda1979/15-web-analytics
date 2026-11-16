@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS events (
   browser    TEXT,
   browser_version TEXT,
   device     TEXT,
+  device_model TEXT,       -- e.g. "Pixel 8"; '' when the UA carries no model
   os         TEXT,
   is_bot     INTEGER NOT NULL DEFAULT 0
 );

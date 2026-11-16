@@ -9,6 +9,7 @@ import {
   topPages,
   topSources,
   topDevices,
+  topModels,
   topBrowsers,
   topCountries,
   topOses,
@@ -29,6 +30,7 @@ import {
   topPagesFiltered,
   topSourcesFiltered,
   topDevicesFiltered,
+  topModelsFiltered,
   topBrowsersFiltered,
   topCountriesFiltered,
   topOsesFiltered,
@@ -58,6 +60,7 @@ const EXPORT_COLUMNS = [
   'browser',
   'browser_version',
   'device',
+  'device_model',
   'os',
 ];
 
@@ -100,6 +103,7 @@ export function exportSummary(db, startMs, endMs, format = 'json', fq) {
     pages: fq ? topPagesFiltered(db, startMs, endMs, 50, fq) : topPages(db, startMs, endMs, 50),
     sources: fq ? topSourcesFiltered(db, startMs, endMs, 50, fq) : topSources(db, startMs, endMs, 50),
     devices: fq ? topDevicesFiltered(db, startMs, endMs, 50, fq) : topDevices(db, startMs, endMs, 50),
+    models: fq ? topModelsFiltered(db, startMs, endMs, 50, fq) : topModels(db, startMs, endMs, 50),
     browsers: fq ? topBrowsersFiltered(db, startMs, endMs, 50, fq) : topBrowsers(db, startMs, endMs, 50),
     countries: fq ? topCountriesFiltered(db, startMs, endMs, 50, fq) : topCountries(db, startMs, endMs, 50),
     oses: fq ? topOsesFiltered(db, startMs, endMs, 50, fq) : topOses(db, startMs, endMs, 50),
