@@ -606,6 +606,9 @@ test('dashboard serves static HTML', async () => {
   assert.ok(/<option value="">Custom range<\/option>/.test(html), 'dashboard has a custom-range option');
   // Effective-range readout element exists so the active window is visible.
   assert.ok(html.includes('id="rangeLabel"'), 'dashboard has an effective-range readout');
+  // Realtime per-minute buckets are drawn as a compact sparkline in the badge.
+  assert.ok(html.includes('id="rtSpark"'), 'dashboard has a realtime sparkline canvas');
+  assert.ok(html.includes('drawSpark(buckets)'), 'dashboard draws the realtime bucket sparkline');
 });
 
 test('retention prune deletes old events and keeps aggregates consistent', async () => {

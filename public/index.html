@@ -25,7 +25,7 @@
     <select id="fDevice"><option value="">Device: all</option></select>
     <button id="clearFilters" title="Clear filters">x</button>
   </div>
-  <span id="realtimeBadge"><span class="dot"></span><span id="rtLabel">realtime…</span></span>
+  <span id="realtimeBadge"><span class="dot"></span><span id="rtLabel">realtime…</span><canvas id="rtSpark" class="spark" width="96" height="20"></canvas></span>
   <a class="btn" id="exportCsv" href="/api/export?format=csv">Export CSV</a>
   <a class="btn" id="exportJson" href="/api/export?format=json">Export JSON</a>
   <a class="btn" href="/api/audit?format=text" target="_blank">Audit</a>
@@ -270,6 +270,25 @@
     sel.value = (current && options.indexOf(current) >= 0) ? current : '';
   }
 
+  // Draw the realtime per-minute buckets as a compact sparkline next to the
+  // live badge. The 96x20 canvas walks the same bucket list the KPI reads, so
+  // the two never disagree.
+  function drawSpark(buckets) {
+    var c = el('rtSpark');
+    if (!c) return;
+    var ctx = c.getContext('2d');
+    var W = c.width, H = c.height;
+    ctx.clearRect(0, 0, W, H);
+    if (!buckets || !buckets.length) return;
+    var max = Math.max.apply(null, buckets.map(function (b) { return b.visits; })) || 1;
+    var iw = W / buckets.length;
+    ctx.fillStyle = 'rgba(56,189,248,0.85)';
+    buckets.forEach(function (b, i) {
+      var h = Math.round(((H - 2) * b.visits) / max);
+      ctx.fillRect(i * iw + 1, H - h, Math.max(iw - 2, 1), h);
+    });
+  }
+
   function loadRealtime() {
     fetch('/api/realtime')
       .then(function (r) { return r.json(); })
@@ -277,6 +296,7 @@
         var cur = d.current || { visits: 0, uniques: 0 };
         el('kNowV').textContent = cur.visits;
         el('rtLabel').textContent = 'realtime ' + cur.visits + ' pv / ' + cur.uniques + ' uniq (5m)';
+        drawSpark(d.buckets);
       })
       .catch(function () {});
   }

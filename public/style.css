@@ -47,6 +47,7 @@ header a.btn { text-decoration: none; }
   background: var(--green);
   animation: pulse 1.2s infinite;
 }
+#rtSpark { display: block; }
 @keyframes pulse { 50% { opacity: 0.25; } }
 main { max-width: 1180px; margin: 0 auto; padding: 20px; }
 .kpis {
