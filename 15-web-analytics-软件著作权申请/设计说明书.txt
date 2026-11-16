@@ -1,0 +1,414 @@
+软件名称：15-web-analytics
+软件版本：V1.0
+著作权人：xuda1979
+文档名称：软件设计说明书
+编写依据：GB/T 8567-2006《计算机软件文档编制规范》
+
+========================================================
+目　录
+========================================================
+1 引言
+　1.1 编写目的
+　1.2 项目背景
+　1.3 术语定义
+　1.4 参考资料
+　1.5 系统目标
+2 总体设计
+　2.1 系统结构
+　2.2 模块划分
+　2.3 软件接口设计
+　2.4 接口（HTTP API）设计
+　2.5 数据库设计
+3 详细设计
+　3.1 配置模块（config.js）
+　3.2 数据访问层（store.js / schema.js）
+　3.3 隐私模块（privacy.js）
+　3.4 浏览器识别模块（ua.js）
+　3.5 采集模块（collector.js）
+　3.6 分析模块（analytics.js）
+　3.7 导出模块（exporter.js）
+　3.8 限流模块（ratelimit.js）
+　3.9 数据留存模块（retention.js）
+　3.10 审计模块（audit.js）
+　3.11 服务端（server.js）
+　3.12 命令行工具（cli.js）
+　3.13 关键流程设计
+4 设计约束与可扩展性
+
+========================================================
+1 引言
+========================================================
+
+1.1 编写目的
+　　本文档描述网站访问统计分析软件 15-web-analytics V1.0 的总体结构与详细设
+计，供软件维护、二次开发与著作权登记审查使用。文档按 GB/T 8567-2006《计算机
+软件文档编制规范》中《软件设计说明书》的要求编写。
+
+1.2 项目背景
+　　网站站长普遍需要访问量统计，但主流第三方统计服务依赖 cookie 与跨站追踪
+标识，在中国大陆存在隐私合规（《中华人民共和国个人信息保护法》）与数据出境
+问题。本项目设计并实现一款“无 cookie、全自托管、单进程、SQLite 存储”的轻量
+网站分析系统：统计脚本无需同意弹窗，数据不出本机，指标覆盖访问量、独立访客、
+跳出率、来源渠道、设备/浏览器分布、实时趋势等常用需求。
+
+1.3 术语定义
+　　表 1-1 术语定义
+　　──────────────
+　　事件（event）：一条页面浏览记录（pageview），对应一次页面装载产生的上报。
+　　访问（visit）：同一游客在访问窗口内的连续事件集合，对应一次“会话”。
+　　游客键（guest_key）：对“IP+User-Agent”做 HMAC-SHA256 加盐哈希得到的伪匿
+　　　　名标识，用于在不存储明文身份的前提下近似识别访客。
+　　访问窗口（visitWindowMs）：判定连续两次事件归属同一访问的最大时间间隔，
+　　　　默认 30 分钟。
+　　独立访客（unique visitor）：以游客键去重计数的访问者数量。
+　　跳出率（bounce rate）：仅产生一次页面浏览的访问数占全部访问数的比例。
+　　写穿式缓存（write-through cache）：事件写入原始表时同步增量更新聚合表。
+　　聚合不变式（invariant）：任意时间范围下，按日/周/月序列求和恒等于原始总量。
+
+1.4 参考资料
+　　[1] GB/T 8567-2006《计算机软件文档编制规范》
+　　[2] ECMAScript Language Specification（ECMA-262，2023）
+　　[3] Node.js 22 官方文档《node:sqlite》模块说明
+　　[4] SQLite 官方文档（fifth-generation SQL database）
+　　[5] The Web Privacy Sandbox / ua-parser-js 项目文档
+
+1.5 系统目标
+　　(1) 功能目标：提供采集、统计、筛选、导出、留存、审计的完整闭环；
+　　(2) 隐私目标：零 cookie、零明文 IP（默认）、零第三方服务，数据本地驻留；
+　　(3) 性能目标：中等规模站点（百万级事件）下仪表盘读请求秒级响应；
+　　(4) 运维目标：单命令启动、单文件数据库、环境变量全量配置、健康检查。
+
+========================================================
+2 总体设计
+========================================================
+
+2.1 系统结构
+　　系统为“浏览器采集端 + 单进程服务端 + 内置 SQLite 存储”的三层结构，全部
+代码运行在一个 Node.js 进程中，无外部数据库服务器与消息中间件。
+
+　　浏览器页面
+　　　│　加载 /wa.js（约 1KB，无 cookie）
+　　　▼
+　　HTTP 上报（POST /api/collect，sendBeacon 或 XHR）
+　　　│
+　　　▼
+　　──────────── 服务端单进程（Node.js ≥ 22.5.0）────────────
+　　│  ? 配置模块 config.js　　　? 限流模块 ratelimit.js　　　　│
+　　│  ? 采集模块 collector.js　 ? 隐私模块 privacy.js　　　　　│
+　　│  ? 浏览器识别 ua.js　　　　? 分析模块 analytics.js　　　　│
+　　│  ? 导出模块 exporter.js　　? 留存模块 retention.js　　　　│
+　　│  ? 审计模块 audit.js　　　 ? 服务端 server.js / CLI cli.js│
+　　│  ? 数据访问层 store.js（node:sqlite / DatabaseSync）　　　│
+　　└─────────────────────────────────────────────────────┘
+　　　　　　　　　│
+　　　　　　　　　▼
+　　　　SQLite 单文件（data/analytics.sqlite，WAL 模式）
+　　　　　　事件表（原始数据）+ 聚合缓存表 + 元信息表
+
+2.2 模块划分
+　　表 2-1 程序模块清单
+　　┌────────────┬───────────────────────────────────────┬─────────┐
+　　│ 模块文件　　│ 职责概要　　　　　　　　　　　　　　　　│ 剥离注释│
+　　│　　　　　　│　　　　　　　　　　　　　　　　　　　　　│ 后行数 │
+　　├────────────┼───────────────────────────────────────┼─────────┤
+　　│ config.js　│ 读取 WA_* 环境变量，输出全局配置对象　　│　42　　│
+　　│ store.js　 │ SQLite 打开、迁移、日期键值工具　　　　　│　68　　│
+　　│ schema.js　│ 数据库表与索引定义（DDL）　　　　　　　　│　85　　│
+　　│ privacy.js │ HMAC 游客哈希、密钥读写、IP 匿名化　　　│　34　　│
+　　│ ua.js　　　│ User-Agent 本地解析、爬虫识别　　　　　　│　20　　│
+　　│ collector.js│ 事件规范化、写入、聚合缓存、会话边界　　│　215　　│
+　　│ analytics.js│ 时间序列、Top 榜单、入口出口、实时、KPI│　394　　│
+　　│ exporter.js│ 事件/汇总 CSV、JSON 导出　　　　　　　　│　97　　│
+　　│ ratelimit.js│ 定窗口 IP 限流器　　　　　　　　　　　　│　32　　│
+　　│ retention.js│ 过期事件清理与缓存重建　　　　　　　　　│　84　　│
+　　│ audit.js　 │ 隐私审计报告生成　　　　　　　　　　　　│　138　　│
+　　│ server.js　│ HTTP 服务、路由、自动留存调度　　　　　　│　379　　│
+　　│ cli.js　　 │ 命令行：seed / collect / prune / audit　│　143　　│
+　　│ public/wa.js│ 浏览器端采集脚本（压缩后约 1KB）　　　　│　　-　　│
+　　└────────────┴───────────────────────────────────────┴─────────┘
+　　模块依赖关系：所有业务模块单向依赖 config.js；store.js 依赖 schema.js；
+　　exporter.js / server.js 依赖 analytics.js；retention.js 依赖 collector.js
+　　的 refreshEntryExitCore；server.js 聚合全部模块并通过 HTTP 对外开放。
+
+2.3 软件接口设计
+　　2.3.1 配置接口
+　　系统全部可调参数通过环境变量注入，默认值见下表。
+　　表 2-2 环境变量配置
+　　┌──────────────────────────┬──────────┬──────────────────────────┐
+　　│ 环境变量　　　　　　　　　│ 默认值　　│ 含义　　　　　　　　　　　│
+　　├──────────────────────────┼──────────┼──────────────────────────┤
+　　│ WA_HOST / WA_PORT　　　　 │127.0.0.1/8787│ 监听地址与端口　　　　│
+　　│ WA_DATA_DIR　　　　　　　 │ ./data　 │ 数据目录　　　　　　　　　│
+　　│ WA_DB_PATH　　　　　　　　│ 见 config│ SQLite 数据库文件路径　　│
+　　│ WA_HASH_SALT　　　　　　　│ wa-local- │ 密钥派生盐；设置后密钥为 │
+　　│　　　　　　　　　　　　　 │ salt　　　│ sha256(salt) 的确定性值　│
+　　│ WA_VISIT_WINDOW_MS　　　 │ 1800000　│ 访问窗口（30 分钟）　　　│
+　　│ WA_STORE_IP　　　　　　　 │ 0（否）　│ 是否明文存储 IP　　　　　│
+　　│ WA_REALTIME_WINDOW_MS　　│ 300000　 │ 实时窗口（5 分钟）　　　 │
+　　│ WA_COLLECT_RATE_LIMIT /　│ 60 /　　　│ 采集限流：每 IP 每窗口最大│
+　　│ WA_COLLECT_RATE_WINDOW_MS│ 60000　　│ 请求数与窗口长度　　　　 │
+　　│ WA_RETENTION_DAYS　　　　 │ 0（关闭）│ 数据保留天数，0 为不自动 │
+　　│　　　　　　　　　　　　　 │　　　　　│ 清理　　　　　　　　　　 │
+　　│ WA_SNIPPET_PATH 等 6 项　│ /wa.js 等 │ 路由路径（可自定义）　　 │
+　　└──────────────────────────┴──────────┴──────────────────────────┘
+
+　　2.3.2 模块间调用接口（导出函数）
+　　config.js：导出 config 单例对象、ensureDataDir()；
+　　store.js　：openDb(dbPath)，dayKey(ms)，monthKey(ms)，monthStart(ms)，
+　　　　　　　　weekStart(ms)，iso(ms)，bucketMinutes(startMs, endMs)；
+　　privacy.js：loadOrCreateSecret(dataDir)，hashGuest(ip, ua, secret)，
+　　　　　　　　anonymizeIp(ip)；
+　　ua.js　　：parseUa(ua)，isBot(ua)；
+　　collector.js：normalizeEvent(payload, meta, secret)，insertEvent(db, event)，
+　　　　　　　　refreshEntryExit(db, sinceMs)，refreshEntryExitCore(db, sinceMs)，
+　　　　　　　　referrerDomain(referrer)；
+　　analytics.js：totals / visitStats / dailySeries / weeklySeries / monthlySeries /
+　　　　　　　　topPages / topSources / topDevices / topBrowsers / topCountries /
+　　　　　　　　topOses / entryExitPages / realtime，及全部 *Filtered 变体，
+　　　　　　　　toCsv(rows, columns)；
+　　exporter.js：exportEvents(db, startMs, endMs, format, fq)，
+　　　　　　　　exportSummary(db, startMs, endMs, format, fq)；
+　　ratelimit.js：RateLimiter 类（check / keyFor / tick）；
+　　retention.js：pruneEvents(db, cutoffMs)；
+　　audit.js　：generateAudit(db)；
+　　server.js ：createServer()，startServer()（测试引导），导出 __db。
+
+2.4 接口（HTTP API）设计
+　　表 2-3 HTTP 接口
+　　┌─────────────┬──────┬──────────────────────────────────────────┐
+　　│ 路径　　　　　│ 方法 │ 说明　　　　　　　　　　　　　　　　　　　│
+　　├─────────────┼──────┼──────────────────────────────────────────┤
+　　│ /wa.js　　　 │ GET　│ 返回约 1KB 采集脚本（text/javascript），　│
+　　│　　　　　　　│　　　│ 页面 embed 即可上报　　　　　　　　　　　 │
+　　│ /api/collect│ POST │ 接收 pageview JSON，校验后写库，204 应答；│
+　　│　　　　　　　│　　　│ 超过限流返回 429 + Retry-After　　　　　 │
+　　│ /api/overview│ GET │ 返回统计汇总 JSON：totals、visit_stats、　│
+　　│　　　　　　　│　　　│ daily/weekly/monthly、pages/sources/　　│
+　　│　　　　　　　│　　　│ devices/browsers/countries/oses、　　│
+　　│　　　　　　　│　　　│ paths（入口/出口）；支持 ?days=N、?from=、│
+　　│　　　　　　　│　　　│ ?to=、?page=、?source=、?device= 筛选　 │
+　　│ /api/realtime│ GET │ 返回最近窗口按分钟分组实时访问量　　　　　│
+　　│ /api/export │ GET │ 导出事件明细或汇总，?format=csv|json，　│
+　　│　　　　　　　│　　　│ ?summary=1，支持同上筛选参数　　　　　　 │
+　　│ /api/audit　│ GET │ 隐私审计报告，?format=text|1 输出纯文本　│
+　　│ /api/health │ GET │ 存活探测，返回 {ok: true, ts}　　　　　　　│
+　　│ /；/index.html│ GET │ 内置仪表盘（静态 HTML + 内联 JS/CSS）　 │
+　　│ /static/*　 │ GET │ 静态资源（路径穿越防护）　　　　　　　　　│
+　　└─────────────┴──────┴──────────────────────────────────────────┘
+
+2.5 数据库设计
+　　2.5.1 设计原则
+　　(1) events 表是唯一数据源（source of truth），聚合表全部可由其重建；
+　　(2) 写穿式聚合缓存降低读延迟；缓存与原始数据的一致性由回归测试守护；
+　　(3) 默认不存明文 IP，仅存游客键（HMAC 摘要）；
+　　(4) WAL 日志模式 + busy_timeout，支撑单进程并发读写。
+
+　　2.5.2 表结构
+　　表 2-4 events（事件原始表）
+　　┌─────────────────┬─────────────┬───────────────────────────────┐
+　　│ 字段　　　　　　 │ 类型　　　　 │ 说明　　　　　　　　　　　　　 │
+　　├─────────────────┼─────────────┼───────────────────────────────┤
+　　│ id　　　　　　　 │ INTEGER PK　│ 自增主键　　　　　　　　　　　 │
+　　│ ts　　　　　　　 │ INTEGER　　 │ 事件时间（epoch 毫秒）　　　　 │
+　　│ visited_at　　　│ TEXT　　　　 │ ISO-8601 UTC 时间戳　　　　　 │
+　　│ guest_key　　　 │ TEXT　　　　 │ 游客键：HMAC-SHA256(IP|UA)　→ │
+　　│　　　　　　　　 │　　　　　　 │ 绝不等于明文 IP　　　　　　　 │
+　　│ ip　　　　　　　│ TEXT NULL　 │ 明文 IP；仅 WA_STORE_IP=1 写入│
+　　│ ua　　　　　　　│ TEXT　　　　 │ User-Agent（长度 ≤500）　　　 │
+　　│ path　　　　　　│ TEXT　　　　 │ 页面路径（长度 ≤512）　　　　 │
+　　│ referrer / ref_domain │ TEXT │ 来源 URL 与规范化来源域名　　 │
+　　│ title　　　　　 │ TEXT　　　　 │ 页面标题（≤300）　　　　　　　 │
+　　│ screen_w/h　　　│ INTEGER　　 │ 屏幕宽高（px）　　　　　　　　 │
+　　│ lang　　　　　　│ TEXT　　　　 │ 浏览器语言（≤20）　　　　　　 │
+　　│ country　　　　 │ TEXT NULL　 │ 地区码（仅区级粒度）　　　　　 │
+　　│ visit_key　　　 │ INTEGER　　 │ 所属访问首个事件的时间戳　　　 │
+　　│ entry_path/exit_path │ TEXT │ 访问的入口页 / 出口页　　　　 │
+　　│ browser / browser_version │ TEXT │ 浏览器名 / 主版本号　 │
+　　│ device / os　　 │ TEXT　　　　 │ 设备类型 / 操作系统　　　　　 │
+　　│ is_bot　　　　　│ INTEGER　　 │ 1 表示爬虫 / 机器人（不进指标）│
+　　└─────────────────┴─────────────┴───────────────────────────────┘
+
+　　表 2-5 聚合缓存表
+　　┌───────────────────┬─────────────────────────────────────────┐
+　　│ 表名　　　　　　　 │ 说明　　　　　　　　　　　　　　　　　　 │
+　　├───────────────────┼─────────────────────────────────────────┤
+　　│ agg_daily_pages　 │ 日 × 页面：visits/uniques/entries/exits│
+　　│ agg_daily_sources │ 日 × 来源域名（含（直接访问））　　　　 │
+　　│ agg_daily_devices │ 日 × 设备类型　　　　　　　　　　　　　 │
+　　│ agg_daily_browsers│ 日 × 浏览器　　　　　　　　　　　　　　 │
+　　│ agg_daily_realtime│ 日 × 1 分钟桶（实时统计数据源）　　　　 │
+　　│ agg_monthly_buckets│ 周 / 月桶：yyyymm × (week|month) × 起点│
+　　│ meta　　　　　　　 │ 键值元信息（schema_version、last_prune）│
+　　└───────────────────┴─────────────────────────────────────────┘
+
+　　2.5.3 索引
+　　idx_events_ts（ts）、idx_events_guest（guest_key, ts）、
+　　idx_events_path（path）、idx_events_visit（visit_key）。
+
+========================================================
+3 详细设计
+========================================================
+
+3.1 配置模块（config.js）
+　　数据结构：config 对象为一组 env → 规范化值的映射，导出 ensureDataDir()。
+　　算法：int()/bool() 两个纯解析函数将环境变量字符串转换为整数与布尔值，
+　　非法输入回退默认值；dbPath 在未显式指定时由 dataDir 派生，避免两处配置
+　　漂移。
+　　关键设计：模块加载即缓存配置（模块级常量），全局单例、只读。
+
+3.2 数据访问层（store.js / schema.js）
+　　数据结构：SCHEMA_TABLES / SCHEMA_INDEXES 为 DDL 字符串。
+　　算法：
+　　(1) openDb()：以 DatabaseSync 打开，依次执行 PRAGMA journal_mode=WAL、
+　　　　busy_timeout=5000、synchronous=NORMAL；建表 → 迁移（对旧库 ALTER
+　　　　ADD 新增列：visit_key、entry_path、exit_path）→ 建索引 → 写入
+　　　　schema_version；
+　　(2) dayKey(ms)/monthKey(ms)：按 UTC 生成的 "YYYY-MM-DD" / "YYYY-MM" 键；
+　　(3) weekStart(ms)：取 UTC 周一零点；monthStart(ms)：取 UTC 当月 1 日零点。
+　　　　三者均为“分桶键”：同一周 / 月内不同时刻的事件必须映射到同一 `start`，
+　　　　故截断到 UTC 对齐而非本地时区。
+
+3.3 隐私模块（privacy.js）
+　　数据结构：磁盘文件 dataDir/.wa_secret 存储 64 位十六进制密钥（0600 权限）。
+　　算法：
+　　(1) loadOrCreateSecret()：密钥文件存在则读取；否则若配置了非默认 WA_HASH_
+　　　　SALT，则以 sha256(salt) 派生确定性密钥（便于多实例复用身份），否则
+　　　　生成 32 字节随机密钥；原子落盘；
+　　(2) hashGuest()：HMAC-SHA256(secret, "ip|ua") 十六进制输出，单向不可逆，
+　　　　反向还原 IP 在计算上不可行；
+　　(3) anonymizeIp()：IPv4 末段置 x，IPv6 仅保留前 3 段，用于导出视图。
+　　关键设计：明文 IP 默认不进入数据库，仅进入哈希输入。
+
+3.4 浏览器识别模块（ua.js）
+　　数据结构：Map 缓存 (User-Agent → 解析结果)，避免重复解析。
+　　算法：parseUa() 调用 ua-parser-js 本地解析，提取 browser / browserVersion /
+　　os / device；isBot() 以正则 /bot|crawl|spider|slurp|pinterest|monitor|
+　　uptime|preview/i 识别爬虫。全部在进程内完成，无网络请求。
+
+3.5 采集模块（collector.js）
+　　3.5.1 normalizeEvent(payload, meta, secret)
+　　输入：浏览器上报字段（path、referrer、title、sw、sh、lang）+ 服务端注入的
+　　meta（ip、ua、country、可选 ts）；输出规范化事件对象。对字符串字段做长度
+　　截断防滥用；数值经 clampInteger 钳制为非负整数；调用 parseUa / isBot 丰富
+　　维度并标记爬虫。
+　　3.5.2 insertEvent(db, event)
+　　关键算法——唯一访客判定：查该 guest_key 最近一条非爬虫事件 ts，若不存在
+　　或 event.ts - prev.ts > visitWindowMs，则视作新访问（isUnique=1）；否则视为
+　　延续访问（isUnique=0）。
+　　关键算法——访问边界：新访问事件以自身 ts 为 visit_key、自身 path 同时为临
+　　时 entry/exit；延续访问沿用前一事件的 visit_key 与 entry_path，以当前 path
+　　刷新 exit_path。随后写入 events 表。
+　　关键算法——写穿式缓存：仅对非爬虫事件增量更新六个聚合表。每一行按维度键
+　　upsert，visits+1、uniques+isUnique；入口/出口计数在 agg_daily_pages 先按
+　　isUnique 预置 ±1（最终准确值由 refreshEntryExit 收敛）；实时桶以 ts 对齐到
+　　分钟写入 agg_daily_realtime；周 / 月桶写入 agg_monthly_buckets（weekStart /
+　　monthStart 对齐）。全部写入同一 SQLite 事务提交即一致。
+　　3.5.3 refreshEntryExitCore / refreshEntryExit
+　　算法：取 [sinceMs, ∞) 非爬虫事件按（guest_key, ts）排序；对每个游客，按访
+　　问窗口切分“帧”（帧内相邻事件间隔 ≤ visitWindowMs）；每帧第一事件 path 为
+　　entry、最后一事件 path 为 exit；批量 UPDATE 事件行的 entry_path/exit_path，
+　　并为 visit_key 为空的历史行回填帧首 ts。对外事务版本 refreshEntryExit 包
+　　BEGIN/COMMIT；供留存模块在自身事务内复用的无事务版本为
+　　refreshEntryExitCore。
+
+3.6 分析模块（analytics.js）
+　　数据结构：dayKeysBetween 生成连续日 键列表；各 series 函数构造“满尺度
+　　序列”（缺失桶补 0），保证图表纵轴与日期轴完整。
+　　算法：
+　　(1) totals()：COUNT(*)+COUNT(DISTINCT guest_key)，条件 is_bot=0 与时间范围，
+　　　　时间范围上界含等号（包容式），杜绝同一毫秒事件漏计；
+　　(2) dailySeries()：读 agg_daily_realtime 按日聚合，再映射到完整日序列；
+　　(3) weeklySeries() / monthlySeries()：读 agg_monthly_buckets 的
+　　　　bucket='week'/'month'，以 weekStart / monthStart 对齐键聚合；
+　　(4) topQuery 系列：GROUP BY path/source/device/... ORDER BY visits DESC
+　　　　LIMIT n，uniques 用 COUNT(DISTINCT ...CASE WHEN is_bot=0) 得去重数；
+　　(5) entryExitPages()：以 visit_key 关联子查询取每访问的第一个 / 最后一个
+　　　　事件（MIN(id) / MAX(id)），按 path 计数，精确得到入口 / 出口分布；
+　　(6) visitStats()：CTE 按 visit_key 分组求 events 数、min/max ts，聚合出会话
+　　　　数、跳出数（events=1 的访问）、平均时长 AVG(last-first)，再规格化为
+　　　　bounce_rate（×1000 舍入保留 1 位小数）与 avg_duration_ms；
+　　(7) realtime()：读 agg_daily_realtime 的 [now-window, now] 分钟桶，输出序
+　　　　列与“当前分钟”合计。窗口上下钳位，防止乱序事件污染未来桶；
+　　(8) Filtered 变体：带页面/来源/设备筛选时聚合缓存缺维度，退化为对 events
+　　　　的直接扫描（ts 索引限界），语义与无筛选分支完全对齐；
+　　(9) entryExitFiltered：先选“命中筛选的访问集合”（matching_visits），再回
+　　　　该集合的真实入口/出口——筛选作用于访问而非单条事件，语义更合理；
+　　(10) toCsv()：RFC 4180 转义（逗号/引号/换行包裹引号，双写内引号）。
+
+3.7 导出模块（exporter.js）
+　　算法：exportEvents() 按时间范围（及可选筛选谓词 fq）读取 is_bot=0 事件，
+　　IP 恒以 anonymizeIp 匿名化（无论是否开启明文存储），csv 格式经 toCsv 输出；
+　　exportSummary() 复用聚合 / 顶层榜单函数组装与仪表盘一致的十个区块，csv 时
+　　分节输出“# 节名 + 表体”。
+
+3.8 限流模块（ratelimit.js）
+　　数据结构：Map（key → {winStart, count}），maxEntries=10000。
+　　算法：固定时间窗口限流——窗口起点 = floor(now/windowMs)×windowMs；同窗口
+　　计数超过 limit 返回「距下一窗口毫秒数」（供 Retry-After），否则放行；tick
+　　在 Map 超阈值时淘汰过期窗口，防止伪造 X-Forwarded-For 撑爆内存。
+
+3.9 数据留存模块（retention.js）
+　　算法（pruneEvents）：
+　　(1) 开启事务；DELETE FROM events WHERE ts < cutoffMs；
+　　(2) 若删除数 >0：清空六个聚合表，从存留的非爬虫事件（按 guest_key, ts 排
+　　　　序）重建全部缓存——复刻 insertEvent 的唯一访客判定（首条 / 间隔 >
+　　　　visitWindowMs 记 1）、入口出口预置、实时桶、周 / 月桶；
+　　(3) 调用 refreshEntryExitCore 重建入口 / 出口边（此时位于同一事务内，故用
+　　　　无事务核心变体，避免“事务嵌套”错误）；
+　　(4) 记录 meta.last_prune；提交。删除为 0 时直接提交且不动缓存——保证不变式
+　　「任意序列求和 = totals」在删旧数据后依然成立。
+
+3.10 审计模块（audit.js）
+　　算法：generateAudit() 组装数据流说明（5 步）、7 项合规检查（cookie、个人
+　　字段、明文 IP、脚本体积、地区粒度、本地驻留、数据留存，各自 pass/warn）、
+　　表清单、事件统计与配置快照；dbstat 不可用时安全降级。整量返回 JSON，服务
+　　端可转纯文本。
+
+3.11 服务端（server.js）
+　　数据结构：全局单例 db 与 secret；dashboardHtml 启动时读入内存；collectLimiter
+　　按配置条件构造。
+　　路由：handleSnippet / handleCollect / handleOverview / handleRealtime /
+　　handleExport / handleAudit / handleHealth / 静态。collect 通道先限流再
+　　readJsonBody（4KB 上限，防止内存耗尽），随后 normalizeEvent + insertEvent，
+　　成功返回 204。
+　　安全设计：响应头 X-Content-Type-Options、X-Frame-Options、Referrer-Policy；
+　　/static/* 做 path.resolve 前缀校验防目录穿越；不写任何 Set-Cookie。
+　　自动任务（仅直接运行时启动）：每 5 分钟 refreshEntryExit（回看 2 天）；
+　　retentionDays>0 时启动即 prune 一次并每 6 小时 prune 一次。
+　　停机：SIGINT/SIGTERM → server.close() 排空气车 → db.close() → 3 秒超时强退。
+
+3.12 命令行工具（cli.js）
+　　seed：按“游客数 × 访问多次 × 每次多页”分层随机生成跨 60 天演示数据（时
+　　间戳错峰分布，避免生成“未来”数据），另注入两条爬虫样本，随后执行一次入
+　　口出口刷新；
+　　collect：单条构造上报并打印 id 与是否唯一；
+　　prune：--days=N 决定保留窗口并调用 pruneEvents；
+　　audit：调用 generateAudit 并以高亮格式打印检查项与统计摘要。
+
+3.13 关键流程设计
+　　3.13.1 页面浏览采集主流程
+　　页面装载 → 执行 wa.js（sendBeacon 优先，XHR 兜底；导航类型为 bfcache/
+　　restore 时跳过）→ POST /api/collect（path/referrer/title/sw/sh/lang）→
+　　server 限流判定 → JSON 校验（≤4KB）→ normalizeEvent（UA 解析、爬虫标记、
+　　游客键求值）→ insertEvent（写 events + 写穿式更新六张聚合缓存）→ 204。
+　　3.13.2 仪表盘统计读取流程
+　　GET /api/overview?days=30（可选筛选）→ 无筛选：totals + visitStats +
+　　series(读缓存) + 各 Top 榜 + 入口/出口；有筛选：全部退化为 events 直接读取
+　　→ JSON 返回 → 前端渲染图表与榜单。
+　　3.13.3 数据留存流程
+　　（自动：启动 + 每 6h；手动：npm run prune）→ cutoff = now - retentionDays
+　　× 24h → 事务内删除过期原始事件 → 清空聚合缓存 → 按存留事件重建（含唯一访
+　　客与访问边界） → 刷新入口/出口边 → 记录 last_prune → 提交。
+
+========================================================
+4 设计约束与可扩展性
+========================================================
+　　(1) 单进程约束：SQLite 单写者模型下，业务写入集中在同一 DatabaseSync 句柄，
+　　　　由 WAL + busy_timeout 保证并发安全；多实例部署时建议每实例独立数据库
+　　　　或引入负载均衡器按 IP 哈希路由；
+　　(2) 日期分桶统一 UTC：避免夏令时导致的桶错位；
+　　(3) 扩展入口：新增维度列 → 扩展聚合表与 upsert 键；新增筛选维度 → 在
+　　　　filteredQuery 与 analytics Filtered 变体同步扩展；
+　　(4) 导出与审计仅依赖本地数据，可平滑迁移到其他存储（需重写 store 层）。
+
+　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　—— 全文完 ——
