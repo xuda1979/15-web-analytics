@@ -6,6 +6,10 @@ import path from 'node:path';
 import { config } from './config.js';
 import { SCHEMA } from './schema.js';
 
+// The snippet's "~1KB budget". The status gate below fails the check when the
+// served file is missing or exceeds this, matching what the report prose claims.
+const SNIPPET_BUDGET_BYTES = 1024;
+
 // Actual byte size of the served collector snippet, or null when the file is
 // absent (so a future refactor can't silently desync report and reality).
 function snippetBytes() {
@@ -15,6 +19,29 @@ function snippetBytes() {
   } catch {
     return null;
   }
+}
+
+// The snippet_size gate, factored out of the report so it can be tested for
+// every branch (missing file / over budget / within budget) without re-booting
+// the server. `byteCount` is the measured size (`snippetBytes`), `publicDir`
+// is where the snippet is served from — used only for the detail message.
+export function snippetSizeCheck(byteCount, publicDir) {
+  if (byteCount === null) {
+    return {
+      status: 'fail',
+      detail: `The served snippet (public/wa.js) could not be measured — the file is missing from ${publicDir}. A privacy-first tracker must actually ship the snippet it describes.`,
+    };
+  }
+  if (byteCount > SNIPPET_BUDGET_BYTES) {
+    return {
+      status: 'fail',
+      detail: `The served snippet (public/wa.js) is ${byteCount} bytes — over the ${SNIPPET_BUDGET_BYTES}-byte (~1KB) budget. The collect payload should stay minimal and cookie-less.`,
+    };
+  }
+  return {
+    status: 'pass',
+    detail: `The served snippet (public/wa.js) is a single end-to-end JS file, ${fmtBytes(byteCount)} (${byteCount} bytes), within the ~1KB budget.`,
+  };
 }
 
 function fmtBytes(n) {
@@ -209,10 +236,7 @@ export function generateAudit(db) {
     {
       id: 'snippet_size',
       label: 'Collector snippet size',
-      status: 'pass',
-      detail: snippetByteCount === null
-        ? 'The served snippet (public/wa.js) could not be measured.'
-        : `The served snippet (public/wa.js) is a single end-to-end JS file, ${fmtBytes(snippetByteCount)} (${snippetByteCount} bytes), well under the ~1KB budget.`,
+      ...snippetSizeCheck(snippetByteCount, config.publicDir),
     },
     {
       id: 'region_only',

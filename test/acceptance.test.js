@@ -689,7 +689,8 @@ test('privacy audit report generates and flags posture', async () => {
   const ipCheck = audit.checks.find((c) => c.id === 'ip_not_stored');
   assert.ok(ipCheck && ipCheck.status === 'pass', 'IP not stored by default');
   const sizeCheck = audit.checks.find((c) => c.id === 'snippet_size');
-  assert.match(sizeCheck ? sizeCheck.detail : '', /\d+ bytes/, 'audit reports the real snippet size');
+  assert.ok(sizeCheck && sizeCheck.status === 'pass', 'live snippet fits the ~1KB budget');
+  assert.match(sizeCheck.detail, /\d+ bytes/, 'audit reports the real snippet size');
   const personalCheck = audit.checks.find((c) => c.id === 'no_personal_fields');
   assert.ok(personalCheck && personalCheck.status === 'pass', 'no personal columns by default');
   assert.match(personalCheck.detail, /\d+ tables, \d+ columns/, 'audit verifies against the live schema scan');
