@@ -62,6 +62,39 @@ function cookieEvidence() {
   return { files, lines, hits };
 }
 
+// Scan the server-side source for outbound-transmission primitives, so the
+// "storage locality" claim is verified at report time instead of asserted in
+// prose. The client snippet (public/wa.js) is deliberately NOT scanned: its
+// sendBeacon/XHR is the ingestion path (browser -> this server), the product's
+// core function, not an off-box transfer.
+function outboundEvidence() {
+  const dir = import.meta.dirname;
+  let files = 0;
+  let lines = 0;
+  const hits = [];
+  for (const f of fs.readdirSync(dir)) {
+    if (!f.endsWith('.js')) continue;
+    // The scanner's own source is skipped: its pattern is defined as a regex
+    // literal below, which would always self-match and create a false hit.
+    if (f === 'audit.js') continue;
+    let text;
+    try {
+      text = fs.readFileSync(path.join(dir, f), 'utf8');
+    } catch {
+      continue;
+    }
+    files += 1;
+    const fileLines = text.split('\n');
+    lines += fileLines.length;
+    const pattern =
+      /fetch\s*\(|https?\s*\.\s*request\s*\(|net\.(createConnection|connect|Socket)\b|dgram\.(createSocket|send)\b|\bWebSocket\b|child_process|\.sendBeacon\(|XMLHttpRequest/;
+    fileLines.forEach((line, i) => {
+      if (pattern.test(line)) hits.push(`${f}:${i + 1}: ${line.trim().slice(0, 90)}`);
+    });
+  }
+  return { files, lines, hits };
+}
+
 export function generateAudit(db) {
   const lastPrune = db
     .prepare(`SELECT value FROM meta WHERE key = 'last_prune'`)
@@ -108,6 +141,7 @@ export function generateAudit(db) {
   const snippetByteCount = snippetBytes();
 
   const cookie = cookieEvidence();
+  const outbound = outboundEvidence();
 
   const checks = [
     {
@@ -151,8 +185,10 @@ export function generateAudit(db) {
     {
       id: 'local_storage',
       label: 'Storage locality',
-      status: 'pass',
-      detail: `All data lives in a single local SQLite file (${config.dbPath}). Nothing is transmitted off the box.`,
+      status: outbound.hits.length ? 'fail' : 'pass',
+      detail: outbound.hits.length
+        ? `Outbound-transmission primitive${outbound.hits.length > 1 ? 's' : ''} found in server source: ${outbound.hits.join('; ')}. A self-hosted tracker should only answer inbound requests.`
+        : `All data lives in a single local SQLite file (${config.dbPath}). No outbound transmission primitives in the server source (scanned ${outbound.files} files, ${outbound.lines} lines); nothing is transmitted off the box.`,
     },
     {
       id: 'data_retention',
