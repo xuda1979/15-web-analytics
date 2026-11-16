@@ -414,6 +414,40 @@ test('activity by hour of day: full 24h axis summing to totals', async () => {
   assert.ok(Array.isArray(summary.hourly) && summary.hourly.length === 24);
 });
 
+test('page titles are reported in overview, summary, and raw export', async () => {
+  // title travels with the pageview snippet; post explicit values and confirm
+  // the aggregated breakdown picks them up.
+  await request('POST', '/api/collect', pageview({ path: '/title/one', title: 'First Article' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(903),
+  });
+  await wait(5);
+  await request('POST', '/api/collect', pageview({ path: '/title/two', title: 'Second Post' }), {
+    'user-agent': UA_DESKTOP_FIREFOX,
+    'x-forwarded-for': uniqueIp(904),
+  });
+
+  const json = (await request('GET', '/api/overview')).json();
+  assert.ok(Array.isArray(json.titles), 'titles should be an array');
+  const first = json.titles.find((t) => t.title === 'First Article');
+  assert.ok(first && first.visits >= 1, 'First Article should be present in titles');
+  assert.ok(json.titles.some((t) => t.title === 'Second Post'), 'Second Post should be present in titles');
+
+  // Filtered view keeps the dimension inside the filtered scope.
+  const f = (await request('GET', '/api/overview?days=30&source=%28direct%29')).json();
+  assert.ok(Array.isArray(f.titles), 'titles stays a list under filters');
+
+  // Summary export carries the titles dimension.
+  const summary = (await request('GET', '/api/export?days=30&format=json&summary=1')).json();
+  assert.ok(Array.isArray(summary.titles) && summary.titles.some((t) => t.title === 'First Article'));
+
+  // Raw JSON export already included the per-event title column.
+  const rows = (await request('GET', '/api/export?days=30&format=json')).json();
+  const row = rows.find((r) => r.path === '/title/one');
+  assert.ok(row, 'title event exported');
+  assert.equal(row.title, 'First Article', 'raw export carries title');
+});
+
 test('visit stats: bounce rate and average duration', async () => {
   const base = (await request('GET', '/api/overview')).json().visit_stats || { sessions: 0, bounces: 0 };
 

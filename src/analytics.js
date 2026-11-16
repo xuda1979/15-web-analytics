@@ -544,6 +544,38 @@ export function topScreensFiltered(db, startMs, endMs, limit, fq) {
     .map((r) => ({ screen: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
 }
 
+// The title column is captured at collect time and carried in raw exports, but
+// never aggregated. Surface it as a page-title breakdown so the dashboard
+// answers "what content are people actually reading?". Empty titles (payloads
+// that omitted title) are excluded, same as the empty-source rows.
+export function topTitles(db, startMs, endMs, limit = 10) {
+  const w = whereClause(startMs, endMs);
+  return db
+    .prepare(
+      `SELECT title AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ${w.sql} AND is_bot = 0 AND title IS NOT NULL AND title != ''
+       GROUP BY title ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(...w.args, limit)
+    .map((r) => ({ title: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
+}
+
+export function topTitlesFiltered(db, startMs, endMs, limit, fq) {
+  return db
+    .prepare(
+      `SELECT title AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}
+         AND title IS NOT NULL AND title != ''
+       GROUP BY title ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(startMs, endMs, ...fq.args, limit)
+    .map((r) => ({ title: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
+}
+
 export function entryExitFiltered(db, startMs, endMs, limit, fq) {
   // Semantics: the filters apply to the VISIT, not to the edge row. A visit
   // that touches the filtered page/source/device is included and reports its

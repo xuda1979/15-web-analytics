@@ -14,6 +14,7 @@ import {
   topOses,
   topLanguages,
   topScreens,
+  topTitles,
   entryExitPages,
   hourlySeries,
   visitStats,
@@ -30,6 +31,7 @@ import {
   topOsesFiltered,
   topLanguagesFiltered,
   topScreensFiltered,
+  topTitlesFiltered,
   entryExitFiltered,
   hourlySeriesFiltered,
 } from './analytics.js';
@@ -98,6 +100,7 @@ export function exportSummary(db, startMs, endMs, format = 'json', fq) {
     oses: fq ? topOsesFiltered(db, startMs, endMs, 50, fq) : topOses(db, startMs, endMs, 50),
     languages: fq ? topLanguagesFiltered(db, startMs, endMs, 50, fq) : topLanguages(db, startMs, endMs, 50),
     screens: fq ? topScreensFiltered(db, startMs, endMs, 50, fq) : topScreens(db, startMs, endMs, 50),
+    titles: fq ? topTitlesFiltered(db, startMs, endMs, 50, fq) : topTitles(db, startMs, endMs, 50),
     hourly: fq ? hourlySeriesFiltered(db, startMs, endMs, fq) : hourlySeries(db, startMs, endMs),
     entries: fq ? entryExitFiltered(db, startMs, endMs, 50, fq).entries : entryExitPages(db, startMs, endMs, 50).entries,
     exits: fq ? entryExitFiltered(db, startMs, endMs, 50, fq).exits : entryExitPages(db, startMs, endMs, 50).exits,
