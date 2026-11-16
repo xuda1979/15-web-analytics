@@ -2,9 +2,9 @@
 //
 // Design notes:
 //  - `events` is the append-only raw store (the "source of truth").
-//  - `agg_daily*` and `agg_weekly*` tables are denormalized aggregate caches.
-//    They are rebuilt on demand (upsert per event) so that queries never need
-//    to scan raw events, keeping dashboard reads fast on large data sets.
+//  - `agg_daily*` and `agg_weekly*` tables are denormalized aggregate caches
+//    kept in sync on write; today they back only the daily/weekly/monthly
+//    series reads (top lists always scan raw events).
 //  - Per privacy defaults the IP is stored only as a salted HMAC digest
 //    (`guest_key`) unless WA_STORE_IP=1.
 
@@ -36,37 +36,11 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 -- Daily aggregate caches (cache of last agg run; rebuilt incrementally).
--- NOTE: entries/exits are NOT cached here - entry/exit counts are derived
--- from the raw events table (entryExitPages/entryExitFiltered), so those
--- columns were removed to avoid dead writes on the insert path.
-CREATE TABLE IF NOT EXISTS agg_daily_pages (
-  d         TEXT NOT NULL,
-  path      TEXT NOT NULL,
-  visits    INTEGER NOT NULL DEFAULT 0,
-  uniques   INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (d, path)
-);
-CREATE TABLE IF NOT EXISTS agg_daily_sources (
-  d         TEXT NOT NULL,
-  source    TEXT NOT NULL,
-  visits    INTEGER NOT NULL DEFAULT 0,
-  uniques   INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (d, source)
-);
-CREATE TABLE IF NOT EXISTS agg_daily_devices (
-  d         TEXT NOT NULL,
-  kind      TEXT NOT NULL,
-  visits    INTEGER NOT NULL DEFAULT 0,
-  uniques   INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (d, kind)
-);
-CREATE TABLE IF NOT EXISTS agg_daily_browsers (
-  d         TEXT NOT NULL,
-  browser   TEXT NOT NULL,
-  visits    INTEGER NOT NULL DEFAULT 0,
-  uniques   INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (d, browser)
-);
+-- NOTE: only the realtime (per-minute) series is cached today. The per-dimension
+-- daily caches (pages/sources/devices/browsers) were removed - all top-list
+-- breakdowns read the raw events table (topPages & co.), so the per-insert
+-- upserts were pure write amplification with no read path. Entries/exits are
+-- likewise derived from raw events (entryExitPages/entryExitFiltered).
 CREATE TABLE IF NOT EXISTS agg_daily_realtime (
   day        TEXT NOT NULL,
   bucket1m   INTEGER NOT NULL,     -- epoch ms floored to the minute

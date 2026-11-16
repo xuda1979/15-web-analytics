@@ -279,11 +279,11 @@ export function hourlySeriesFiltered(db, startMs, endMs, fq) {
 
 // Entry and exit pages, counted per visit.
 //
-// The incremental `agg_daily_pages.entries/exits` counters are not maintained
-// here because they would need to track which event within a visit is the true
-// "last" one, and the provisional exit edge is only finalized by
-// refreshEntryExit. Instead we derive exact per-visit counts from `events`
-// using `visit_key` (the first event's ts, shared by every event of a visit):
+// These are not cached in the agg_* tables — a cache would need to track
+// which event within a visit is the true "last" one, and the provisional exit
+// edge is only finalized by refreshEntryExit. Instead we derive exact
+// per-visit counts from `events` using `visit_key` (the first event's ts,
+// shared by every event of a visit):
 //   entries = the FIRST event of each visit   -> path of MIN(id) per visit_key
 //   exits   = the LAST  event of each visit   -> path of MAX(id) per visit_key
 // A 3-page visit contributes exactly one entry + one exit. Bots are excluded.

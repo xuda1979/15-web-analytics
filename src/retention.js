@@ -17,27 +17,10 @@ import { config } from './config.js';
 import { dayKey, monthKey, monthStart, weekStart } from './store.js';
 import { refreshEntryExitCore } from './collector.js';
 
-const AGG_TABLES = [
-  'agg_daily_pages',
-  'agg_daily_sources',
-  'agg_daily_devices',
-  'agg_daily_browsers',
-  'agg_daily_realtime',
-  'agg_monthly_buckets',
-];
-
-// Increment a counter cache given the numeric deltas (mirror of
-// collector.js `upsert`, kept private here).
-function upsert(db, table, where, uniqDelta) {
-  const args = { ...where, u: uniqDelta };
-  db.prepare(
-    `INSERT INTO ${table} (${Object.keys(where).join(', ')}, visits, uniques)
-     VALUES (${Object.keys(where).map(() => '?').join(', ')}, 1, ?)
-     ON CONFLICT(${Object.keys(where).join(', ')}) DO UPDATE SET
-       visits = visits + 1,
-       uniques = uniques + excluded.uniques`,
-  ).run(...Object.values(where), args.u);
-}
+// Only the series caches are rebuilt after a prune — the per-dimension daily
+// caches (pages/sources/devices/browsers) were removed because every top-list
+// breakdown reads the raw events table, so they had no read path.
+const AGG_TABLES = ['agg_daily_realtime', 'agg_monthly_buckets'];
 
 // Delete events older than cutoffMs and rebuild the aggregate caches from the
 // surviving (non-bot) rows. Returns { deleted, cutoff_ts }.
@@ -55,7 +38,7 @@ export function pruneEvents(db, cutoffMs) {
       // same unique-visitor heuristic against the surviving rows only.
       const rows = db
         .prepare(
-          `SELECT guest_key, ts, path, ref_domain, device, browser
+          `SELECT guest_key, ts
            FROM events WHERE is_bot = 0
            ORDER BY guest_key, ts`,
         )
@@ -68,12 +51,6 @@ export function pruneEvents(db, cutoffMs) {
         lastKey = r.guest_key;
         lastTs = r.ts;
         const dk = dayKey(r.ts);
-
-        upsert(db, 'agg_daily_pages', { d: dk, path: r.path }, uniq);
-
-        upsert(db, 'agg_daily_sources', { d: dk, source: r.ref_domain || '(direct)' }, uniq);
-        upsert(db, 'agg_daily_devices', { d: dk, kind: r.device }, uniq);
-        upsert(db, 'agg_daily_browsers', { d: dk, browser: r.browser || 'Unknown' }, uniq);
 
         const bm = Math.floor(r.ts / 60_000) * 60_000;
         db.prepare(

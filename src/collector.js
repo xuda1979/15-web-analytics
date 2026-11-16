@@ -53,20 +53,6 @@ export function normalizeEvent(payload, meta, secret) {
   };
 }
 
-// Increment a counter cache given the numeric deltas.
-function upsert(db, table, where, uniqDelta) {
-  // table: one of agg_daily_pages / _sources / _devices / _browsers
-  // Each has visits + 1 and uniques + uniqDelta per event.
-  const args = { ...where, u: uniqDelta };
-  db.prepare(
-    `INSERT INTO ${table} (${Object.keys(where).join(', ')}, visits, uniques)
-     VALUES (${Object.keys(where).map(() => '?').join(', ')}, 1, ?)
-     ON CONFLICT(${Object.keys(where).join(', ')}) DO UPDATE SET
-       visits = visits + 1,
-       uniques = uniques + excluded.uniques`,
-  ).run(...Object.values(where), args.u);
-}
-
 // Insert a normalized event and update aggregate caches. Returns {id}.
 export function insertEvent(db, event) {
   const windowMs = config.visitWindowMs;
@@ -152,13 +138,11 @@ export function insertEvent(db, event) {
     const dk = dayKey(event.ts);
     const uniqDelta = isUnique ? 1 : 0;
 
-    // Entry/exit edges are per-VISIT, not per event, and are counted from the
-    // raw `events` table (entryExitPages/entryExitFiltered), never from this
-    // cache — so no entries/exits columns are maintained here.
-    upsert(db, 'agg_daily_pages', { d: dk, path: event.path }, uniqDelta);
-    upsert(db, 'agg_daily_sources', { d: dk, source: event.ref_domain || '(direct)' }, uniqDelta);
-    upsert(db, 'agg_daily_devices', { d: dk, kind: event.device }, uniqDelta);
-    upsert(db, 'agg_daily_browsers', { d: dk, browser: event.browser || 'Unknown' }, uniqDelta);
+    // NOTE: the per-dimension daily caches (pages/sources/devices/browsers)
+    // were removed — every top-list breakdown reads the raw events table, so
+    // those per-insert upserts were dead writes. Entry/exit edges are likewise
+    // per-VISIT and counted from raw events (entryExitPages/entryExitFiltered).
+    // Only the realtime + weekly/monthly series keep write-through caches.
 
     // realtime per-minute buckets
     const bm = Math.floor(event.ts / 60_000) * 60_000;
