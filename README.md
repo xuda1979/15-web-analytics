@@ -130,7 +130,10 @@ schema, and per-check status (cookies / personal fields / raw-IP storage /
 snippet size / region granularity / storage locality). The raw-IP-storage
 check gates on the live `events` table, not just the config flag: if any
 event still carries a cleartext IP under `WA_STORE_IP=0` it fails, citing the
-leftover rows.
+leftover rows. The retention check likewise verifies the live table: with a
+window configured it fails if events older than the cutoff remain (citing the
+count and the last prune run), and with pruning disabled it reports the
+oldest retained event so the manual-prune posture is visible.
 
 ## Tests
 

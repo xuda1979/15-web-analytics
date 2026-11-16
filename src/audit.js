@@ -71,6 +71,59 @@ export function ipStoreCheck(storeIp, ipRows, totalEvents) {
   };
 }
 
+// The data_retention gate, factored out of the report so every branch is
+// testable without booting the server. The status must follow the live events
+// table, not just echo the config flag: `retentionDays` selects the posture
+// (automatic window vs manual-only), but the "events older than N days are
+// pruned" claim only holds when the table actually lacks rows past the cutoff.
+// `lastPrune` is meta.last_prune (recorded when a prune deleted rows),
+// `oldestEventMs` the MIN(ts) of the live table (null when empty), `nowMs` the
+// report-time clock used to derive the cutoff, `oldCount` the report-time
+// count of events older than the cutoff, and `totalEvents` the events count
+// used to state the scanned population.
+export function retentionCheck(retentionDays, lastPrune, oldestEventMs, nowMs, oldCount = 0, totalEvents = 0) {
+  const DAY_MS = 24 * 3600 * 1000;
+  const lastRun = lastPrune
+    ? `last automated prune: ${fmtDay(new Date(lastPrune).getTime())}`
+    : 'no automated prune has ever run';
+  if (retentionDays <= 0) {
+    // Deliberate manual-prune posture (WA_RETENTION_DAYS=0 documented in the
+    // README): never a violation of the config, but the detail reports the
+    // oldest retained event so the operator sees what is actually kept.
+    if (oldestEventMs === null) {
+      return {
+        status: 'pass',
+        detail: 'Automatic pruning is disabled (WA_RETENTION_DAYS=0); no events have been recorded yet, so manual pruning (`npm run prune`) has nothing to trim.',
+      };
+    }
+    return {
+      status: 'pass',
+      detail: `Automatic pruning is disabled (WA_RETENTION_DAYS=0) — a deliberate manual-prune posture. The oldest retained event dates to ${fmtDay(oldestEventMs)}; prune manually with npm run prune when it exceeds your retention needs.`,
+    };
+  }
+  const cutoffMs = nowMs - retentionDays * DAY_MS;
+  if (oldCount > 0) {
+    return {
+      status: 'fail',
+      detail: `${oldCount} of ${totalEvents} events predate the ${retentionDays}-day retention window (cutoff ${fmtDay(cutoffMs)}) but still remain in the events table, contradicting the automatic-prune claim (startup + every 6h) and npm run prune; ${lastRun}. Run a prune so the retention claim holds against the live data.`,
+    };
+  }
+  if (oldestEventMs === null) {
+    return {
+      status: 'pass',
+      detail: `Events older than ${retentionDays} days are pruned automatically (startup + every 6h) and on demand via npm run prune; no events recorded yet; ${lastRun}.`,
+    };
+  }
+  return {
+    status: 'pass',
+    detail: `Events older than ${retentionDays} days are pruned automatically (startup + every 6h) and on demand via npm run prune; the oldest retained event (${fmtDay(oldestEventMs)}) is inside the ${retentionDays}-day window (cutoff ${fmtDay(cutoffMs)}); ${lastRun}.`,
+  };
+}
+
+function fmtDay(ms) {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
 function fmtBytes(n) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
@@ -197,6 +250,17 @@ export function generateAudit(db) {
                      MIN(ts) AS first_ts, MAX(ts) AS last_ts
               FROM events`)
     .get();
+  // Retention posture verified against the live table: count the events that
+  // predate the configured window (prune semantics: ts < cutoff) so the gate
+  // can check the automatic-prune claim, not just echo WA_RETENTION_DAYS.
+  const retentionOldCount =
+    config.retentionDays > 0
+      ? Number(
+          db
+            .prepare(`SELECT COUNT(*) AS n FROM events WHERE ts < ?`)
+            .get(Date.now() - config.retentionDays * 24 * 3600 * 1000).n,
+        )
+      : 0;
   const ipEvents = db
     .prepare(`SELECT COUNT(*) AS n FROM events WHERE ip IS NOT NULL`)
     .get().n;
@@ -281,11 +345,14 @@ export function generateAudit(db) {
     {
       id: 'data_retention',
       label: 'Data retention',
-      status: 'pass',
-      detail:
-        config.retentionDays > 0
-          ? `Events older than ${config.retentionDays} days are pruned automatically (startup + every 6h) and on demand via npm run prune; last run: ${lastPrune || 'never'}.`
-          : 'Automatic pruning is disabled (WA_RETENTION_DAYS=0). Prune manually with `npm run prune`.',
+      ...retentionCheck(
+        config.retentionDays,
+        lastPrune,
+        stats.first_ts ?? null,
+        Date.now(),
+        retentionOldCount,
+        Number(stats.events),
+      ),
     },
   ];
 

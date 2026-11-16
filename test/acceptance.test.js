@@ -732,6 +732,13 @@ test('privacy audit report generates and flags posture', async () => {
   const personalCheck = audit.checks.find((c) => c.id === 'no_personal_fields');
   assert.ok(personalCheck && personalCheck.status === 'pass', 'no personal columns by default');
   assert.match(personalCheck.detail, /\d+ tables, \d+ columns/, 'audit verifies against the live schema scan');
+  const retentionCheck = audit.checks.find((c) => c.id === 'data_retention');
+  assert.ok(retentionCheck && retentionCheck.status === 'pass', 'disabled retention is a deliberate posture');
+  assert.match(
+    retentionCheck.detail,
+    /oldest retained event dates to \d{4}-\d{2}-\d{2}/,
+    'audit verifies the retention posture against the live oldest event',
+  );
 
   const textR = await request('GET', '/api/audit?format=text');
   assert.ok(textR.text().includes('Data flow'));
