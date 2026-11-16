@@ -524,6 +524,12 @@ test('activity by hour of day: full 24h axis summing to totals', async () => {
   const hour = new Date().getUTCHours();
   const bucket = json.hourly[hour];
   assert.ok(bucket && bucket.visits >= before[hour].visits + 2, 'current hour bucket counts the new pageviews');
+  // Per-hour uniques count distinct guests, not just pageviews: the two posts
+  // above came from different IPs, so the hour's uniques rise together.
+  assert.ok(
+    json.hourly[hour].uniques >= before[hour].uniques + 2,
+    'per-hour uniques track distinct guests in the current hour',
+  );
 
   // Zero-fill: all 24 buckets present even before a day of data accumulates.
   assert.ok(json.hourly.every((h) => h.visits >= 0), 'each hour bucket carries a visit count');
@@ -743,6 +749,10 @@ test('dashboard serves static HTML', async () => {
   // Session count is computed by visit_stats but was never rendered; the KPI
   // row must expose it (bounce rate is derived from sessions/visits).
   assert.ok(html.includes('id="kSessions"'), 'dashboard has a sessions KPI');
+  // The activity-by-hour card renders the full 24-bucket axis (not the 10-row
+  // bar-truncation) and shows per-hour uniques next to each hour's visits.
+  assert.ok(html.includes("function hours(target, rows)"), 'dashboard renders the full 24h axis');
+  assert.ok(/uniq/.test(html), 'dashboard shows per-hour uniques');
 });
 
 test('retention prune deletes old events and keeps aggregates consistent', async () => {

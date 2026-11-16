@@ -161,6 +161,24 @@
     }).join('');
   }
 
+  // Full-axis variant for fixed-size dimensions: unlike bars() it keeps every
+  // row (no .slice(0, 10)), so the 24-hour activity card shows all buckets —
+  // the API serves a complete zero-filled axis, and truncating it here would
+  // silently drop the later hours. The value column shows both the pageviews
+  // and the distinct uniques counted in that hour.
+  function hours(target, rows) {
+    var host = el(target);
+    if (!rows || !rows.length) { host.innerHTML = '<div class="empty">no data</div>'; return; }
+    var max = Math.max.apply(null, rows.map(function (r) { return r.visits; })) || 1;
+    host.innerHTML = rows.map(function (r) {
+      var pct = Math.round((r.visits / max) * 100);
+      var hh = (r.hour < 10 ? '0' : '') + r.hour;
+      return '<div class="bar"><span class="label">' + esc(hh + ':00') + '</span>' +
+        '<span class="track"><span class="fill" style="width:' + pct + '%"></span></span>' +
+        '<span class="v">' + r.visits + ' / ' + r.uniques + ' uniq</span></div>';
+    }).join('');
+  }
+
   function table(target, rows, cols) {
     var host = el(target);
     if (!rows || !rows.length) { host.innerHTML = '<div class="empty">no data</div>'; return; }
@@ -246,7 +264,7 @@
         bars('oses', data.oses, 'os', 'visits');
         bars('languages', data.languages, 'lang', 'visits');
         bars('screens', data.screens, 'screen', 'visits');
-        bars('hourly', data.hourly, 'hour', 'visits');
+        hours('hourly', data.hourly);
         table('entries', data.paths.entries, [{ k: 'path', h: 'Path' }, { k: 'visits', h: 'Entries', num: true }]);
         table('exits', data.paths.exits, [{ k: 'path', h: 'Path' }, { k: 'visits', h: 'Exits', num: true }]);
         var series = state.gran === 'monthly' ? data.monthly

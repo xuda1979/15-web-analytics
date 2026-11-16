@@ -23,8 +23,9 @@ local SQLite file, no third-party services.
 - Pageviews, unique visitors (IP-hash + UA + 30min visit window heuristic),
   bounce rate, average visit duration, sources, devices, device models,
   browsers (with the dominant version, e.g. "Chrome 120"), countries, operating
-  systems, visitor languages, screen sizes, visits by hour of day (UTC),
-  referring pages, page titles, and entry/exit pages.
+  systems, visitor languages, screen sizes, visits by hour of day (UTC,
+  pageviews + distinct uniques per hour), referring pages, page titles, and
+  entry/exit pages.
 - Real-time view (last 5 minutes, per-minute buckets) and day / week / month
   aggregate views (the dashboard chart switches granularity).
 - Filters by page, source, device, and date range.
