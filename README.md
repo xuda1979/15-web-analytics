@@ -86,7 +86,7 @@ single run. The `collect` and `seed` subcommands write into the configured
 | `/api/collect` | POST | Record a pageview (204) |
 | `/api/overview` | GET | Aggregate numbers (pageviews, uniques, sessions, bounce rate, avg visit duration), top lists (pages, sources, devices, device models, browsers, countries, operating systems, languages, screen sizes, referring pages, page titles), visits by hour of day, daily/weekly/monthly series, filters (`page`, `source`, `device`, `days`, `from`, `to`) |
 | `/api/realtime` | GET | Per-minute buckets for the last `WA_REALTIME_WINDOW_MS` |
-| `/api/export` | GET | Raw or summary data as CSV/JSON (`format=csv\|json`, `summary=1`); IP always redacted. The raw export carries one row per event, including the per-visit `entry_path` / `exit_path` edges. Accepts the same `page` / `source` / `device` filters as `/api/overview` |
+| `/api/export` | GET | Raw or summary data as CSV/JSON (`format=csv\|json`, `summary=1`); IP always redacted. The raw export carries one row per event, including the per-session `visit_key` (the timestamp of each visit's first event, shared by every event in that visit) and the per-visit `entry_path` / `exit_path` edges. Accepts the same `page` / `source` / `device` filters as `/api/overview` |
 | `/api/audit` | GET | Privacy audit report (`format=text` for plain text) |
 | `/api/health` | GET | Liveness check |
 | `/` | GET | Dashboard |

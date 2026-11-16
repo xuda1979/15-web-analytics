@@ -48,6 +48,7 @@ const EXPORT_COLUMNS = [
   'visitsSerial',
   'visited_at',
   'guest_key',
+  'visit_key',
   'ip',
   'path',
   'entry_path',

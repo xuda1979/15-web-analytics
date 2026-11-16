@@ -523,6 +523,49 @@ test('raw export carries the per-event entry/exit paths of each visit', async ()
   assert.equal(solo.exit_path, '/edge/solo', 'solo event is its own exit');
 });
 
+test('raw export carries the per-visit session key (visit_key)', async () => {
+  // One guest, a 3-page visit within the 30m window. visit_key is the timestamp
+  // of the visit's first event, shared by every event in the same visit; a
+  // distinct guest gets a distinct key.
+  const ip = uniqueIp(931);
+  await request('POST', '/api/collect', pageview({ path: '/vk/start' }), {
+    'user-agent': 'UA-VK/1.0',
+    'x-forwarded-for': ip,
+  });
+  await wait(5);
+  await request('POST', '/api/collect', pageview({ path: '/vk/mid' }), {
+    'user-agent': 'UA-VK/1.0',
+    'x-forwarded-for': ip,
+  });
+  await wait(5);
+  await request('POST', '/api/collect', pageview({ path: '/vk/end' }), {
+    'user-agent': 'UA-VK/1.0',
+    'x-forwarded-for': ip,
+  });
+  await request('POST', '/api/collect', pageview({ path: '/vk/other' }), {
+    'user-agent': 'UA-VK-Other/1.0',
+    'x-forwarded-for': uniqueIp(932),
+  });
+
+  const rows = (await request('GET', '/api/export?days=30&format=json')).json();
+  const start = rows.find((r) => r.path === '/vk/start');
+  const mid = rows.find((r) => r.path === '/vk/mid');
+  const end = rows.find((r) => r.path === '/vk/end');
+  const other = rows.find((r) => r.path === '/vk/other');
+  assert.ok(start && mid && end && other, 'all visit events exported');
+  assert.ok(Number.isInteger(start.visit_key) && start.visit_key > 0, 'visit_key is a positive integer');
+  assert.equal(mid.visit_key, start.visit_key, 'mid event shares the visit key');
+  assert.equal(end.visit_key, start.visit_key, 'final event shares the visit key');
+  assert.notEqual(other.visit_key, start.visit_key, 'a distinct guest gets a distinct visit key');
+  assert.equal(start.entry_path, '/vk/start', 'visit entry is the first page');
+  assert.equal(end.exit_path, '/vk/end', 'final event is the provisional exit');
+
+  // The CSV export carries the same session-key column.
+  const csv = (await request('GET', '/api/export?days=30&format=csv')).text();
+  const header = csv.split('\n')[0];
+  assert.ok(header.includes('visit_key'), 'csv header has the session-key column');
+});
+
 test('activity by hour of day: full 24h axis summing to totals', async () => {
   const base = (await request('GET', '/api/overview')).json().totals;
 
