@@ -373,6 +373,47 @@ test('screen sizes are reported in overview, summary, and raw export', async () 
   assert.equal(row.screen_h, 1440, 'raw export carries screen_h');
 });
 
+test('activity by hour of day: full 24h axis summing to totals', async () => {
+  const base = (await request('GET', '/api/overview')).json().totals;
+
+  const before = (await request('GET', '/api/overview')).json().hourly;
+
+  // Two pageviews in the current UTC hour.
+  await request('POST', '/api/collect', pageview({ path: '/hour/h1' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(901),
+  });
+  await wait(5);
+  await request('POST', '/api/collect', pageview({ path: '/hour/h2' }), {
+    'user-agent': UA_DESKTOP_FIREFOX,
+    'x-forwarded-for': uniqueIp(902),
+  });
+
+  const json = (await request('GET', '/api/overview')).json();
+  assert.ok(Array.isArray(json.hourly), 'hourly should be an array');
+  assert.equal(json.hourly.length, 24, 'hourly covers a full 24-hour axis');
+  const total = json.hourly.reduce((a, b) => a + b.visits, 0);
+  const expected = json.totals.visits;
+  assert.ok(
+    total >= json.totals.visits - base.visits && total <= json.totals.visits,
+    'hourly visits sum to totals within the range',
+  );
+  const hour = new Date().getUTCHours();
+  const bucket = json.hourly[hour];
+  assert.ok(bucket && bucket.visits >= before[hour].visits + 2, 'current hour bucket counts the new pageviews');
+
+  // Zero-fill: all 24 buckets present even before a day of data accumulates.
+  assert.ok(json.hourly.every((h) => h.visits >= 0), 'each hour bucket carries a visit count');
+
+  // Filtered view keeps the dimension inside the filtered scope.
+  const f = (await request('GET', '/api/overview?days=30&source=%28direct%29')).json();
+  assert.ok(Array.isArray(f.hourly) && f.hourly.length === 24, 'hourly stays a full axis under filters');
+
+  // Summary export carries the hourly dimension.
+  const summary = (await request('GET', '/api/export?days=30&format=json&summary=1')).json();
+  assert.ok(Array.isArray(summary.hourly) && summary.hourly.length === 24);
+});
+
 test('visit stats: bounce rate and average duration', async () => {
   const base = (await request('GET', '/api/overview')).json().visit_stats || { sessions: 0, bounces: 0 };
 

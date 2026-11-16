@@ -60,6 +60,7 @@
     <div class="card"><h3>Operating systems</h3><div id="oses"></div></div>
     <div class="card"><h3>Languages</h3><div id="languages"></div></div>
     <div class="card"><h3>Screen sizes</h3><div id="screens"></div></div>
+    <div class="card"><h3>Activity by hour (UTC)</h3><div id="hourly"></div></div>
   </div>
   <div class="row2">
     <div class="card"><h3>Entry pages</h3><div id="entries"></div></div>
@@ -234,6 +235,7 @@
         bars('oses', data.oses, 'os', 'visits');
         bars('languages', data.languages, 'lang', 'visits');
         bars('screens', data.screens, 'screen', 'visits');
+        bars('hourly', data.hourly, 'hour', 'visits');
         table('entries', data.paths.entries, [{ k: 'path', h: 'Path' }, { k: 'visits', h: 'Entries', num: true }]);
         table('exits', data.paths.exits, [{ k: 'path', h: 'Path' }, { k: 'visits', h: 'Exits', num: true }]);
         var series = state.gran === 'monthly' ? data.monthly

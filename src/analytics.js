@@ -205,6 +205,47 @@ export function topScreens(db, startMs, endMs, limit = 10) {
     .map((r) => ({ screen: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
 }
 
+// Activity by hour of day (UTC), zero-filled across a full 24-hour axis so a
+// sparse day still renders a complete distribution. The aggregate caches carry
+// no hour-of-day dimension, so this reads raw events (same ts-indexed scan the
+// filtered paths use).
+export function hourlySeries(db, startMs, endMs) {
+  const w = whereClause(startMs, endMs);
+  const rows = db
+    .prepare(
+      `SELECT CAST(strftime('%H', ts / 1000, 'unixepoch') AS INTEGER) AS hour,
+              COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ${w.sql} AND is_bot = 0
+       GROUP BY hour`,
+    )
+    .all(...w.args);
+  const byHour = new Map(rows.map((r) => [r.hour, r]));
+  return Array.from({ length: 24 }, (_, hour) => {
+    const r = byHour.get(hour);
+    return { hour, visits: r ? Number(r.visits) : 0, uniques: r ? Number(r.uniques) : 0 };
+  });
+}
+
+export function hourlySeriesFiltered(db, startMs, endMs, fq) {
+  const rows = db
+    .prepare(
+      `SELECT CAST(strftime('%H', ts / 1000, 'unixepoch') AS INTEGER) AS hour,
+              COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}
+       GROUP BY hour`,
+    )
+    .all(startMs, endMs, ...fq.args);
+  const byHour = new Map(rows.map((r) => [r.hour, r]));
+  return Array.from({ length: 24 }, (_, hour) => {
+    const r = byHour.get(hour);
+    return { hour, visits: r ? Number(r.visits) : 0, uniques: r ? Number(r.uniques) : 0 };
+  });
+}
+
 // Entry and exit pages, counted per visit.
 //
 // The incremental `agg_daily_pages.entries/exits` counters are not maintained
