@@ -1,8 +1,21 @@
 // Privacy audit report generation. Produces a human-readable + JSON summary
 // of the data flow, schema, retention, and compliance posture.
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { config } from './config.js';
 import { SCHEMA } from './schema.js';
+
+// Actual byte size of the served collector snippet, or null when the file is
+// absent (so a future refactor can't silently desync report and reality).
+function snippetBytes() {
+  try {
+    const f = path.join(config.publicDir, 'wa.js');
+    return fs.existsSync(f) ? fs.statSync(f).size : null;
+  } catch {
+    return null;
+  }
+}
 
 function fmtBytes(n) {
   if (n < 1024) return `${n} B`;
@@ -38,6 +51,8 @@ export function generateAudit(db) {
     dbBytes = 0;
   }
 
+  const snippetByteCount = snippetBytes();
+
   const checks = [
     {
       id: 'no_cookies',
@@ -63,7 +78,9 @@ export function generateAudit(db) {
       id: 'snippet_size',
       label: 'Collector snippet size',
       status: 'pass',
-      detail: 'Snippet is a single end-to-end JS file; its size is checked by the test suite to stay under ~1KB (uncompressed, minified).',
+      detail: snippetByteCount === null
+        ? 'The served snippet (public/wa.js) could not be measured.'
+        : `The served snippet (public/wa.js) is a single end-to-end JS file, ${fmtBytes(snippetByteCount)} (${snippetByteCount} bytes), well under the ~1KB budget.`,
     },
     {
       id: 'region_only',

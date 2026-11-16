@@ -357,6 +357,8 @@ test('privacy audit report generates and flags posture', async () => {
   assert.ok(noCookies && noCookies.status === 'pass');
   const ipCheck = audit.checks.find((c) => c.id === 'ip_not_stored');
   assert.ok(ipCheck && ipCheck.status === 'pass', 'IP not stored by default');
+  const sizeCheck = audit.checks.find((c) => c.id === 'snippet_size');
+  assert.match(sizeCheck ? sizeCheck.detail : '', /\d+ bytes/, 'audit reports the real snippet size');
 
   const textR = await request('GET', '/api/audit?format=text');
   assert.ok(textR.text().includes('Data flow'));
