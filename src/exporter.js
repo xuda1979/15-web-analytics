@@ -43,6 +43,7 @@ const EXPORT_COLUMNS = [
   'lang',
   'country',
   'browser',
+  'browser_version',
   'device',
   'os',
 ];

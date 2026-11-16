@@ -97,5 +97,3 @@ CREATE INDEX IF NOT EXISTS idx_events_visit  ON events(visit_key);
 
 // Full schema string (tables + indexes) for fresh installs and the audit report.
 export const SCHEMA = SCHEMA_TABLES + SCHEMA_INDEXES;
-
-export function meta(db) {}

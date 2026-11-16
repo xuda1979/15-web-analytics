@@ -281,6 +281,35 @@ test('countries and OS are reported in overview and summary export', async () =>
   assert.ok(Array.isArray(summary.oses) && summary.oses.length >= 1);
 });
 
+test('browser versions are reported in overview, summary, and raw export', async () => {
+  await request('POST', '/api/collect', pageview({ path: '/browser/chrome' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(803),
+  });
+  await request('POST', '/api/collect', pageview({ path: '/browser/firefox' }), {
+    'user-agent': UA_DESKTOP_FIREFOX,
+    'x-forwarded-for': uniqueIp(804),
+  });
+
+  // Overview top browsers attach the dominant version to each browser.
+  const json = (await request('GET', '/api/overview')).json();
+  const chrome = json.browsers.find((b) => b.browser === 'Chrome');
+  const firefox = json.browsers.find((b) => b.browser === 'Firefox');
+  assert.ok(chrome && chrome.version, 'Chrome row should carry a version');
+  assert.equal(chrome.version, '120', 'Chrome version parsed from the UA');
+  assert.ok(firefox && firefox.version, 'Firefox row should carry a version');
+  assert.equal(firefox.version, '121', 'Firefox version parsed from the UA');
+
+  // The raw export carries the per-event version column.
+  const rows = (await request('GET', '/api/export?days=30&format=json')).json();
+  const chromeRow = rows.find((r) => r.path === '/browser/chrome');
+  assert.ok(chromeRow, 'chrome event exported');
+  assert.equal(chromeRow.browser_version, '120', 'export carries browser_version');
+
+  const csv = (await request('GET', '/api/export?days=30&format=csv')).text();
+  assert.ok(csv.includes('browser_version'), 'csv header includes browser_version');
+});
+
 test('visit stats: bounce rate and average duration', async () => {
   const base = (await request('GET', '/api/overview')).json().visit_stats || { sessions: 0, bounces: 0 };
 

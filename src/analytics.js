@@ -136,8 +136,30 @@ export function topDevices(db, startMs, endMs, limit = 10) {
   return topQuery(db, 'device', 'device', startMs, endMs, limit);
 }
 
+// The stored browser_version column has no other read path; attach the
+// dominant (most frequent, ties broken lexicographically) version to each
+// browser so the breakdown is actually useful ("Chrome 120" vs "Chrome 121").
+function attachBrowserVersions(db, rows, startMs, endMs, extraSql, extraArgs) {
+  if (!rows.length) return rows;
+  const names = rows.map((r) => r.browser);
+  const where = ['ts >= ?', 'ts <= ?', 'is_bot = 0', `browser IN (${names.map(() => '?').join(',')})`];
+  if (extraSql) where.push(extraSql);
+  const versionRows = db
+    .prepare(
+      `SELECT browser, browser_version AS bv, COUNT(*) AS c
+       FROM events WHERE ${where.join(' AND ')}
+         AND browser_version IS NOT NULL AND browser_version != ''
+       GROUP BY browser, bv ORDER BY c DESC, bv`,
+    )
+    .all(startMs, endMs, ...names, ...(extraArgs || []));
+  const best = new Map();
+  for (const v of versionRows) if (!best.has(v.browser)) best.set(v.browser, v.bv);
+  return rows.map((r) => ({ ...r, version: best.get(r.browser) || null }));
+}
+
 export function topBrowsers(db, startMs, endMs, limit = 10) {
-  return topQuery(db, 'browser', 'browser', startMs, endMs, limit);
+  const rows = topQuery(db, 'browser', 'browser', startMs, endMs, limit);
+  return attachBrowserVersions(db, rows, startMs, endMs, '', []);
 }
 
 export function topCountries(db, startMs, endMs, limit = 10) {
@@ -406,7 +428,8 @@ export function topDevicesFiltered(db, startMs, endMs, limit, fq) {
 }
 
 export function topBrowsersFiltered(db, startMs, endMs, limit, fq) {
-  return topQueryFiltered(db, 'browser', 'browser', startMs, endMs, limit, fq);
+  const rows = topQueryFiltered(db, 'browser', 'browser', startMs, endMs, limit, fq);
+  return attachBrowserVersions(db, rows, startMs, endMs, fq.sql, fq.args);
 }
 
 export function topCountriesFiltered(db, startMs, endMs, limit, fq) {

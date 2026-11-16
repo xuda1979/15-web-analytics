@@ -225,7 +225,9 @@
         bars('pages', data.pages, 'path', 'visits');
         bars('sources', data.sources, 'source', 'visits');
         bars('devices', data.devices, 'device', 'visits');
-        bars('browsers', data.browsers, 'browser', 'visits');
+        bars('browsers', (data.browsers || []).map(function (b) {
+          return { browser: b.version ? b.browser + ' ' + b.version : b.browser, visits: b.visits, uniques: b.uniques };
+        }), 'browser', 'visits');
         bars('countries', data.countries, 'country', 'visits');
         bars('oses', data.oses, 'os', 'visits');
         table('entries', data.paths.entries, [{ k: 'path', h: 'Path' }, { k: 'visits', h: 'Entries', num: true }]);
