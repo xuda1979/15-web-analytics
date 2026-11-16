@@ -11,11 +11,14 @@
 <header>
   <h1>analytics</h1>
   <select id="days">
+    <option value="">Custom range</option>
     <option value="7">Last 7 days</option>
     <option value="30" selected>Last 30 days</option>
     <option value="90">Last 90 days</option>
     <option value="365">Last 365 days</option>
   </select>
+  <input type="date" id="fFrom" title="From date" />
+  <input type="date" id="fTo" title="To date" />
   <div class="filter" id="filters">
     <select id="fPage"><option value="">Page: all</option></select>
     <select id="fSource"><option value="">Source: all</option></select>
@@ -65,28 +68,56 @@
 <script>
 // Tiny dashboard client. No external dependencies, no cookies.
 (function () {
-  var state = { days: 30, page: '', source: '', device: '', gran: 'daily' };
+  var state = { days: 30, from: '', to: '', page: '', source: '', device: '', gran: 'daily' };
   var svgNS = 'http://www.w3.org/2000/svg';
 
   function qs() {
     var p = new URLSearchParams(window.location.search);
-    state.days = Number(p.get('days')) || 30;
+    state.from = p.get('from') ? p.get('from').slice(0, 10) : '';
+    state.to = p.get('to') ? p.get('to').slice(0, 10) : '';
+    // A from/to pair selects the custom range; otherwise fall back to days.
+    state.days = state.from || state.to ? 0 : Number(p.get('days')) || 30;
     state.page = p.get('page') || '';
     state.source = p.get('source') || '';
     state.device = p.get('device') || '';
     state.gran = p.get('gran') || 'daily';
-    document.getElementById('days').value = String(state.days);
-    document.getElementById('granularity').value = state.gran;
+    el('days').value = state.days ? String(state.days) : '';
+    el('fFrom').value = state.from;
+    el('fTo').value = state.to;
+    el('granularity').value = state.gran;
+  }
+  // Apply the active range to a query object: either the preset days count or
+  // an explicit from/to pair (sent as full-day UTC bounds so 'to' is inclusive).
+  function applyRange(u) {
+    u.searchParams.delete('days');
+    u.searchParams.delete('from');
+    u.searchParams.delete('to');
+    if (state.from || state.to) {
+      if (state.from) u.searchParams.set('from', state.from + 'T00:00:00.000Z');
+      if (state.to) u.searchParams.set('to', state.to + 'T23:59:59.999Z');
+    } else {
+      u.searchParams.set('days', String(state.days));
+    }
   }
   // Merge filter/range params onto a URL that already has a query string
   // (e.g. /api/export?format=csv) without producing a second '?'.
   function hrefWithFilters(base) {
     var u = new URL(base, location.origin);
-    u.searchParams.set('days', String(state.days));
+    applyRange(u);
     if (state.page) u.searchParams.set('page', state.page);
     if (state.source) u.searchParams.set('source', state.source);
     if (state.device) u.searchParams.set('device', state.device);
     return u.pathname + '?' + u.searchParams.toString();
+  }
+  // URL params describing the current dashboard view (range + filters + gran).
+  function viewParams() {
+    var p = new URLSearchParams();
+    applyRange(p);
+    if (state.page) p.set('page', state.page);
+    if (state.source) p.set('source', state.source);
+    if (state.device) p.set('device', state.device);
+    if (state.gran !== 'daily') p.set('gran', state.gran);
+    return p;
   }
   function el(id) { return document.getElementById(id); }
   function esc(s) {
@@ -219,37 +250,41 @@
     loadOverview();
     loadRealtime();
     setInterval(loadRealtime, 4000);
+    // A preset day count normally sets the range; picking it again resets any
+    // custom from/to and any active page/source/device filters.
     el('days').addEventListener('change', function () {
       state.days = Number(this.value);
+      state.from = state.to = '';
       state.page = state.source = state.device = '';
-      var p = new URLSearchParams(); p.set('days', String(state.days));
-      history.replaceState(null, '', '?' + p.toString());
+      history.replaceState(null, '', '?' + viewParams().toString());
       loadOverview();
+    });
+    var fromTo = ['fFrom', 'fTo'];
+    fromTo.forEach(function (id) {
+      el(id).addEventListener('change', function () {
+        state.from = el('fFrom').value;
+        state.to = el('fTo').value;
+        state.days = 0;
+        if (state.from || state.to) state.page = state.source = state.device = '';
+        history.replaceState(null, '', '?' + viewParams().toString());
+        loadOverview();
+      });
     });
     el('granularity').addEventListener('change', function () {
       state.gran = this.value;
-      var p = new URLSearchParams();
-      p.set('days', String(state.days));
-      if (state.gran !== 'daily') p.set('gran', state.gran);
-      history.replaceState(null, '', '?' + p.toString());
+      history.replaceState(null, '', '?' + viewParams().toString());
       loadOverview();
     });
     [['fPage', 'page'], ['fSource', 'source'], ['fDevice', 'device']].forEach(function (pair) {
       el(pair[0]).addEventListener('change', function () {
         state[pair[1]] = this.value;
-        var p = new URLSearchParams();
-        p.set('days', String(state.days));
-        if (state.page) p.set('page', state.page);
-        if (state.source) p.set('source', state.source);
-        if (state.device) p.set('device', state.device);
-        history.replaceState(null, '', '?' + p.toString());
+        history.replaceState(null, '', '?' + viewParams().toString());
         loadOverview();
       });
     });
     el('clearFilters').addEventListener('click', function () {
       state.page = state.source = state.device = '';
-      var p = new URLSearchParams(); p.set('days', String(state.days));
-      history.replaceState(null, '', '?' + p.toString());
+      history.replaceState(null, '', '?' + viewParams().toString());
       loadOverview();
     });
   }

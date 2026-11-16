@@ -24,7 +24,7 @@ header {
   flex-wrap: wrap;
 }
 header h1 { font-size: 18px; margin: 0; font-weight: 600; }
-header select, header button, header a.btn {
+header select, header button, header a.btn, header input[type="date"] {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--line);
@@ -32,6 +32,7 @@ header select, header button, header a.btn {
   padding: 6px 12px;
   font-size: 13px;
 }
+header input[type="date"] { color-scheme: dark; }
 header a.btn { text-decoration: none; }
 #realtimeBadge {
   margin-left: auto;

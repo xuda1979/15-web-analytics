@@ -392,7 +392,12 @@ test('bots are excluded from metrics and aggregate views', async () => {
 test('dashboard serves static HTML', async () => {
   const r = await request('GET', '/');
   assert.equal(r.status, 200);
-  assert.ok(r.text().includes('canvas'));
+  const html = r.text();
+  assert.ok(html.includes('canvas'));
+  // Custom date-range controls are exposed next to the days presets.
+  assert.ok(html.includes('id="fFrom"'), 'dashboard has a from-date input');
+  assert.ok(html.includes('id="fTo"'), 'dashboard has a to-date input');
+  assert.ok(/<option value="">Custom range<\/option>/.test(html), 'dashboard has a custom-range option');
 });
 
 test('retention prune deletes old events and keeps aggregates consistent', async () => {
