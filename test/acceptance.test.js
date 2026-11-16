@@ -40,6 +40,31 @@ test('no Set-Cookie on ANY route', async () => {
   }
 });
 
+test('dashboard sends content-security-policy; API/snippet unaffected', async () => {
+  const dash = await request('GET', '/');
+  const csp = dash.headers['content-security-policy'];
+  assert.ok(csp, 'dashboard must send a CSP');
+  assert.ok(csp.includes("script-src 'self' 'unsafe-inline'"), 'dashboard CSP allows its own inline script');
+  assert.ok(csp.includes("frame-ancestors 'none'"), 'dashboard CSP forbids framing');
+
+  // API + snippet endpoints are data; they must not carry a restrictive CSP.
+  for (const url of ['/wa.js', '/api/overview', '/api/realtime', '/api/health', '/api/audit']) {
+    const r = await request('GET', url);
+    assert.equal(r.headers['content-security-policy'], undefined, `${url} must not send CSP`);
+  }
+});
+
+test('permissions policy blocks sensors; x-frame-options denies framing', async () => {
+  for (const url of ['/', '/wa.js', '/api/overview']) {
+    const r = await request('GET', url);
+    assert.ok(
+      r.headers['permissions-policy']?.includes('geolocation=()'),
+      `${url} must deny geolocation`,
+    );
+    assert.equal(r.headers['x-frame-options'], 'DENY', `${url} denies framing`);
+  }
+});
+
 test('POST /api/collect returns 204 and does not set cookies', async () => {
   const r = await request('POST', '/api/collect', pageview({ path: '/t1' }), {
     'user-agent': 'Mozilla/5.0 (X11; Linux) Chrome/120.0',

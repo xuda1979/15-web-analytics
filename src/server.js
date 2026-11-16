@@ -289,12 +289,22 @@ export function createServer() {
     // Never set cookies.
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
 
-    // Baseline hardening headers. CSP for the dashboard is sourced from its
-    // own inline script/style (no external dependencies); the snippet and API
-    // endpoints are data, so connect-src stays permissive for self-hosting.
+    // Baseline hardening headers. The dashboard is self-contained (no external
+    // dependencies), and the snippet/API endpoints are plain data, so a strict
+    // CSP with frame-ancestors 'none' cannot break self-hosting.
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=()');
+    // The dashboard page ships one inline <script> + one inline <style> block
+    // with no external resources, so 'unsafe-inline' applies only to the page
+    // itself; the API and snippet are JSON/text and unaffected by CSP.
+    if (url.pathname === '/' || url.pathname === '/index.html') {
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+      );
+    }
 
     try {
       // Snippet route.
