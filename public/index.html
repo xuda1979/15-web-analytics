@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>15-web-analytics dashboard</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<header>
+  <h1>analytics</h1>
+  <select id="days">
+    <option value="7">Last 7 days</option>
+    <option value="30" selected>Last 30 days</option>
+    <option value="90">Last 90 days</option>
+    <option value="365">Last 365 days</option>
+  </select>
+  <div class="filter" id="filters">
+    <select id="fPage"><option value="">Page: all</option></select>
+    <select id="fSource"><option value="">Source: all</option></select>
+    <select id="fDevice"><option value="">Device: all</option></select>
+    <button id="clearFilters" title="Clear filters">x</button>
+  </div>
+  <span id="realtimeBadge"><span class="dot"></span><span id="rtLabel">realtime…</span></span>
+  <a class="btn" id="exportCsv" href="/api/export?format=csv">Export CSV</a>
+  <a class="btn" id="exportJson" href="/api/export?format=json">Export JSON</a>
+  <a class="btn" href="/api/audit?format=text" target="_blank">Audit</a>
+</header>
+
+<main>
+  <div class="kpis">
+    <div class="kpi"><div class="n" id="kVisits">–</div><div class="l">Pageviews</div></div>
+    <div class="kpi"><div class="n" id="kUniques">–</div><div class="l">Unique visitors</div></div>
+    <div class="kpi"><div class="n" id="kNowV">–</div><div class="l">Right now (5m)</div></div>
+  </div>
+
+  <div class="card"><h3>Pageviews over time
+    <select id="granularity">
+      <option value="daily" selected>Daily</option>
+      <option value="weekly">Weekly</option>
+      <option value="monthly">Monthly</option>
+    </select></h3><canvas id="chart"></canvas></div>
+
+  <div class="grid">
+    <div class="card"><h3>Top pages</h3><div id="pages"></div></div>
+    <div class="card"><h3>Top sources</h3><div id="sources"></div></div>
+  </div>
+  <div class="grid">
+    <div class="card"><h3>Devices</h3><div id="devices"></div></div>
+    <div class="card"><h3>Browsers</h3><div id="browsers"></div></div>
+  </div>
+  <div class="grid">
+    <div class="card"><h3>Countries</h3><div id="countries"></div></div>
+    <div class="card"><h3>Operating systems</h3><div id="oses"></div></div>
+  </div>
+  <div class="row2">
+    <div class="card"><h3>Entry pages</h3><div id="entries"></div></div>
+    <div class="card"><h3>Exit pages</h3><div id="exits"></div></div>
+  </div>
+</main>
+
+<script>
+// Tiny dashboard client. No external dependencies, no cookies.
+(function () {
+  var state = { days: 30, page: '', source: '', device: '', gran: 'daily' };
+  var svgNS = 'http://www.w3.org/2000/svg';
+
+  function qs() {
+    var p = new URLSearchParams(window.location.search);
+    state.days = Number(p.get('days')) || 30;
+    state.page = p.get('page') || '';
+    state.source = p.get('source') || '';
+    state.device = p.get('device') || '';
+    state.gran = p.get('gran') || 'daily';
+    document.getElementById('days').value = String(state.days);
+    document.getElementById('granularity').value = state.gran;
+  }
+  // Merge filter/range params onto a URL that already has a query string
+  // (e.g. /api/export?format=csv) without producing a second '?'.
+  function hrefWithFilters(base) {
+    var u = new URL(base, location.origin);
+    u.searchParams.set('days', String(state.days));
+    if (state.page) u.searchParams.set('page', state.page);
+    if (state.source) u.searchParams.set('source', state.source);
+    if (state.device) u.searchParams.set('device', state.device);
+    return u.pathname + '?' + u.searchParams.toString();
+  }
+  function el(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function bars(target, rows, labelKey, pctKey) {
+    var host = el(target);
+    if (!rows || !rows.length) { host.innerHTML = '<div class="empty">no data</div>'; return; }
+    var max = Math.max.apply(null, rows.map(function (r) { return r[pctKey]; })) || 1;
+    host.innerHTML = rows.slice(0, 10).map(function (r) {
+      var pct = Math.round((r[pctKey] / max) * 100);
+      return '<div class="bar"><span class="label">' + esc(r[labelKey]) + '</span>' +
+        '<span class="track"><span class="fill" style="width:' + pct + '%"></span></span>' +
+        '<span class="v">' + r[pctKey] + '</span></div>';
+    }).join('');
+  }
+
+  function table(target, rows, cols) {
+    var host = el(target);
+    if (!rows || !rows.length) { host.innerHTML = '<div class="empty">no data</div>'; return; }
+    host.innerHTML = '<table><thead><tr>' + cols.map(function (c) { return '<th class="' + (c.num ? 'num' : '') + '">' + esc(c.h) + '</th>'; }).join('') +
+      '</tr></thead><tbody>' + rows.map(function (r) {
+        return '<tr>' + cols.map(function (c) { return '<td class="' + (c.num ? 'num' : '') + '">' + esc(r[c.k]) + '</td>'; }).join('') + '</tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  function drawChart(data) {
+    var c = el('chart');
+    var px = Math.min(window.devicePixelRatio || 1, 2);
+    c.width = c.parentNode.clientWidth * px; c.height = 220 * px;
+    var ctx = c.getContext('2d'); ctx.scale(px, px);
+    var W = c.parentNode.clientWidth, H = 220;
+    ctx.clearRect(0, 0, W, H);
+    var padL = 34, padR = 8, padT = 8, padB = 20;
+    if (!data || data.length === 0) {
+      ctx.fillStyle = '#94a3b8'; ctx.font = '13px sans-serif';
+      ctx.fillText('no data', W / 2 - 24, H / 2); return;
+    }
+    var max = Math.max.apply(null, data.map(function (d) { return d.visits; })) || 1;
+    var iw = (W - padL - padR) / data.length;
+    ctx.font = '10px sans-serif';
+    ctx.fillStyle = '#64748b';
+    ctx.strokeStyle = '#334155';
+    ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, H - padB); ctx.lineTo(W - padR, H - padB);
+    ctx.stroke();
+    data.forEach(function (d, i) {
+      var x = padL + i * iw + iw / 2;
+      var h = ((H - padT - padB) * d.visits) / max;
+      var y = H - padB - h;
+      ctx.fillStyle = 'rgba(56,189,248,0.85)';
+      ctx.fillRect(x - iw * 0.32, y, iw * 0.64, h);
+      if (data.length <= 31) {
+        ctx.fillStyle = '#cbd5e1';
+        ctx.fillText(d.label, x - 9, H - 6);
+      }
+    });
+  }
+
+  function loadOverview() {
+    // Keep export links in sync with the active filters + range.
+    el('exportCsv').href = hrefWithFilters('/api/export?format=csv');
+    el('exportJson').href = hrefWithFilters('/api/export?format=json');
+    fetch(hrefWithFilters('/api/overview'), { headers: { Accept: 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        el('kVisits').textContent = data.totals.visits.toLocaleString();
+        el('kUniques').textContent = data.totals.uniques.toLocaleString();
+        var labels = {};
+        data.pages.forEach(function (p) { labels[p.path] = true; });
+        data.sources.forEach(function (s) { labels[s.source] = true; });
+        data.devices.forEach(function (d) { labels[d.device] = true; });
+        fillSelect(el('fPage'), Object.keys(labels).sort(), state.page, 'Page: all');
+        fillSelect(el('fSource'), Object.keys(labels).sort(), state.source, 'Source: all');
+        fillSelect(el('fDevice'), Object.keys(labels).sort(), state.device, 'Device: all');
+        bars('pages', data.pages, 'path', 'visits');
+        bars('sources', data.sources, 'source', 'visits');
+        bars('devices', data.devices, 'device', 'visits');
+        bars('browsers', data.browsers, 'browser', 'visits');
+        bars('countries', data.countries, 'country', 'visits');
+        bars('oses', data.oses, 'os', 'visits');
+        table('entries', data.paths.entries, [{ k: 'path', h: 'Path' }, { k: 'visits', h: 'Entries', num: true }]);
+        table('exits', data.paths.exits, [{ k: 'path', h: 'Path' }, { k: 'visits', h: 'Exits', num: true }]);
+        var series = state.gran === 'monthly' ? data.monthly
+          : state.gran === 'weekly' ? data.weekly
+          : data.daily;
+        var labelKey = state.gran === 'monthly' ? 'month' : state.gran === 'weekly' ? 'week' : 'date';
+        drawChart((series || []).map(function (d) {
+          return { label: String(d[labelKey]).slice(state.gran === 'daily' ? 5 : 0), visits: d.visits };
+        }));
+      })
+      .catch(function () { el('kVisits').textContent = 'err'; });
+  }
+
+  function fillSelect(sel, options, current, placeholder) {
+    var cur = sel.value;
+    if (!options.length) { sel.innerHTML = '<option value="">' + esc(placeholder) + '</option>'; return; }
+    var html = '<option value="">' + esc(placeholder) + '</option>' +
+      options.map(function (o) { return '<option value="' + esc(o) + '">' + esc(o) + '</option>'; }).join('');
+    sel.innerHTML = html;
+    sel.value = (current && options.indexOf(current) >= 0) ? current : '';
+  }
+
+  function loadRealtime() {
+    fetch('/api/realtime')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var cur = d.current || { visits: 0, uniques: 0 };
+        el('kNowV').textContent = cur.visits;
+        el('rtLabel').textContent = 'realtime ' + cur.visits + ' pv / ' + cur.uniques + ' uniq (5m)';
+      })
+      .catch(function () {});
+  }
+
+  function setup() {
+    qs();
+    loadOverview();
+    loadRealtime();
+    setInterval(loadRealtime, 4000);
+    el('days').addEventListener('change', function () {
+      state.days = Number(this.value);
+      state.page = state.source = state.device = '';
+      var p = new URLSearchParams(); p.set('days', String(state.days));
+      history.replaceState(null, '', '?' + p.toString());
+      loadOverview();
+    });
+    el('granularity').addEventListener('change', function () {
+      state.gran = this.value;
+      var p = new URLSearchParams();
+      p.set('days', String(state.days));
+      if (state.gran !== 'daily') p.set('gran', state.gran);
+      history.replaceState(null, '', '?' + p.toString());
+      loadOverview();
+    });
+    [['fPage', 'page'], ['fSource', 'source'], ['fDevice', 'device']].forEach(function (pair) {
+      el(pair[0]).addEventListener('change', function () {
+        state[pair[1]] = this.value;
+        var p = new URLSearchParams();
+        p.set('days', String(state.days));
+        if (state.page) p.set('page', state.page);
+        if (state.source) p.set('source', state.source);
+        if (state.device) p.set('device', state.device);
+        history.replaceState(null, '', '?' + p.toString());
+        loadOverview();
+      });
+    });
+    el('clearFilters').addEventListener('click', function () {
+      state.page = state.source = state.device = '';
+      var p = new URLSearchParams(); p.set('days', String(state.days));
+      history.replaceState(null, '', '?' + p.toString());
+      loadOverview();
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setup);
+  } else {
+    setup();
+  }
+})();
+</script>
+</body>
+</html>

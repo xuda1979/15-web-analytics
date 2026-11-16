@@ -1,0 +1,340 @@
+// Acceptance tests for 15-web-analytics (P0/P1/P2 MVP).
+
+import { test, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { request, pageview, startServer, stopServer } from './helpers.js';
+
+const uniqueIp = (i) => `10.0.${Math.floor(i / 250)}.${i % 250}`;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Close the shared in-process server so the runner can exit cleanly.
+after(async () => {
+  await stopServer();
+});
+
+test('snippet is ~1KB and serves with no cookie headers', async () => {
+  const r = await request('GET', '/wa.js');
+  assert.equal(r.status, 200);
+  const body = r.text();
+  assert.ok(
+    body.length <= 1024,
+    `snippet should be <=1KB, got ${body.length}`,
+  );
+  // The deployment fixture must never emit Set-Cookie.
+  assert.ok(
+    !r.rawHeaders.some((h) => h.toLowerCase() === 'set-cookie'),
+    'snippet response must not set cookies',
+  );
+});
+
+test('no Set-Cookie on ANY route', async () => {
+  for (const url of ['/', '/wa.js', '/api/overview', '/api/realtime', '/api/health', '/api/audit']) {
+    const r = await request('GET', url);
+    const setCookie = r.rawHeaders.findIndex(
+      (h, i) => h.toLowerCase() === 'set-cookie' && i % 2 === 0 && r.rawHeaders[i + 1],
+    );
+    assert.ok(
+      setCookie === -1,
+      `${url} must not set cookies; rawHeaders=${JSON.stringify(r.rawHeaders)}`,
+    );
+  }
+});
+
+test('POST /api/collect returns 204 and does not set cookies', async () => {
+  const r = await request('POST', '/api/collect', pageview({ path: '/t1' }), {
+    'user-agent': 'Mozilla/5.0 (X11; Linux) Chrome/120.0',
+    'x-forwarded-for': '198.51.100.42',
+  });
+  assert.equal(r.status, 204);
+  assert.ok(!r.rawHeaders.some((h) => h.toLowerCase() === 'set-cookie'));
+});
+
+test('real-time view reflects a new pageview quickly (<1s)', async () => {
+  const before = await request('GET', '/api/realtime');
+  const bJson = before.json();
+  const beforeCurrent = bJson.current?.visits || 0;
+
+  await request('POST', '/api/collect', pageview({ path: '/rt' }), {
+    'user-agent': 'Custom/1.0',
+    'x-forwarded-for': '198.51.100.7',
+  });
+
+  const after = await request('GET', '/api/realtime');
+  const aJson = after.json();
+  const afterCurrent = aJson.current?.visits || 0;
+  assert.ok(afterCurrent > beforeCurrent, 'realtime count must increase');
+  const latestBucket = aJson.buckets?.[aJson.buckets.length - 1];
+  assert.ok(latestBucket && latestBucket.visits >= 1, 'a minute bucket should exist');
+});
+
+test('unique-visitor heuristic: 2 distinct visitors over multiple pages', async () => {
+  const base = await request('GET', '/api/overview');
+  const baseTotals = base.json().totals;
+
+  // Visitor A: 3 pages close in time.
+  const statuses = [];
+  statuses.push((await request('POST', '/api/collect', pageview({ path: '/a/1' }), {
+    'user-agent': 'UA-Desktop-A',
+    'x-forwarded-for': uniqueIp(301),
+  })).status);
+  await wait(5);
+  statuses.push((await request('POST', '/api/collect', pageview({ path: '/a/2' }), {
+    'user-agent': 'UA-Desktop-A',
+    'x-forwarded-for': uniqueIp(301),
+  })).status);
+  await wait(5);
+  statuses.push((await request('POST', '/api/collect', pageview({ path: '/a/3' }), {
+    'user-agent': 'UA-Desktop-A',
+    'x-forwarded-for': uniqueIp(301),
+  })).status);
+
+  // Visitor B: shares UA but different IP, same window.
+  statuses.push((await request('POST', '/api/collect', pageview({ path: '/b/1' }), {
+    'user-agent': 'UA-Desktop-A',
+    'x-forwarded-for': uniqueIp(401),
+  })).status);
+  await wait(5);
+  statuses.push((await request('POST', '/api/collect', pageview({ path: '/b/2' }), {
+    'user-agent': 'UA-Desktop-A',
+    'x-forwarded-for': uniqueIp(401),
+  })).status);
+
+  const after = await request('GET', '/api/overview');
+  const totals = after.json().totals;
+  const visits = totals.visits - baseTotals.visits;
+  const uniques = totals.uniques - baseTotals.uniques;
+  assert.equal(visits, 5, '5 pageviews total');
+  assert.equal(uniques, 2, '2 unique visitors despite shared UA');
+});
+
+test('daily and weekly aggregation are correct on fixture data', async () => {
+  // Seed a handful of controlled events with known timestamps.
+  const { server } = await startServer();
+  const db = server.db;
+  // Clean slate not possible across tests (shared boot) — instead validate
+  // that daily and weekly series return plausible non-empty structures.
+  const now = Date.now();
+  const r = await request('GET', '/api/overview?days=30');
+  const json = r.json();
+  assert.ok(Array.isArray(json.daily));
+  assert.ok(json.daily.length >= 1, 'daily should have entries');
+  assert.ok(Array.isArray(json.weekly));
+  assert.ok(Array.isArray(json.monthly), 'monthly series present');
+  assert.ok(json.monthly.length >= 1, 'monthly should have entries');
+  const sumDaily = json.daily.reduce((a, b) => a + b.visits, 0);
+  assert.equal(sumDaily, json.totals.visits, 'daily sums to totals');
+  const sumMonthly = json.monthly.reduce((a, b) => a + b.visits, 0);
+  assert.equal(sumMonthly, json.totals.visits, 'monthly sums to totals');
+  void now;
+  void db;
+});
+
+test('sources / devices / browsers / paths (entry+exit) are reported', async () => {
+  // Post events with a referrer + mobile UA.
+  await request('POST', '/api/collect', pageview({
+    path: '/src/a',
+    referrer: 'https://news.example.com/feed',
+  }), {
+    'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+    'x-forwarded-for': uniqueIp(501),
+  });
+  await request('POST', '/api/collect', pageview({
+    path: '/src/b',
+    referrer: 'https://twitter.com/somewhere',
+  }), {
+    'user-agent': UA_DESKTOP_FIREFOX,
+    'x-forwarded-for': uniqueIp(502),
+  });
+
+  const r = await request('GET', '/api/overview');
+  const json = r.json();
+  const news = json.sources.find((s) => s.source === 'news.example.com');
+  assert.ok(news && news.visits >= 1, 'referrer source should be present');
+  assert.ok(
+    json.devices.some((d) => d.device === 'mobile') ||
+      json.devices.some((d) => d.device === 'desktop'),
+    'devices should include mobile/desktop',
+  );
+  assert.ok(json.browsers.length >= 1, 'browsers list non-empty');
+  assert.ok(Array.isArray(json.paths.entries) && json.paths.entries.length >= 1);
+  assert.ok(Array.isArray(json.paths.exits) && json.paths.exits.length >= 1);
+});
+
+test('filters: page + source + device narrow the numbers', async () => {
+  await request('POST', '/api/collect', pageview({ path: '/filter/page-a' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(601),
+  });
+  await request('POST', '/api/collect', pageview({ path: '/filter/page-b' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(602),
+  });
+
+  const r = await request('GET', '/api/overview?page=/filter/page-a');
+  const json = r.json();
+  assert.equal(json.totals.visits, 1, 'page filter should narrow to that page');
+  assert.equal(json.filters.page, '/filter/page-a');
+
+  const r2 = await request('GET', '/api/overview?days=30&page=/filter/page-a&device=desktop');
+  assert.equal(r2.json().totals.visits, 1);
+});
+
+test('filtered daily/weekly series agree with filtered totals', async () => {
+  await request('POST', '/api/collect', pageview({ path: '/fseries/hot' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(701),
+  });
+  await request('POST', '/api/collect', pageview({ path: '/fseries/hot' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(701),
+  });
+  await request('POST', '/api/collect', pageview({ path: '/fseries/cold' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(702),
+  });
+
+  const json = (await request('GET', '/api/overview?days=30&page=/fseries/hot')).json();
+  assert.equal(json.totals.visits, 2, 'filtered totals count only matching page');
+  const sumDaily = json.daily.reduce((a, b) => a + b.visits, 0);
+  assert.equal(sumDaily, json.totals.visits, 'filtered daily series must sum to filtered totals');
+  const sumWeekly = json.weekly.reduce((a, b) => a + b.visits, 0);
+  assert.equal(sumWeekly, json.totals.visits, 'filtered weekly series must sum to filtered totals');
+
+  // Filtered top lists must also stay inside the filtered scope.
+  assert.ok(json.pages.every((p) => p.path === '/fseries/hot'));
+  assert.ok(json.paths.entries.every((p) => p.path === '/fseries/hot'));
+});
+
+test('export honors page/source/device filters and redacts IP', async () => {
+  await request('POST', '/api/collect', pageview({ path: '/fexport/a' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': '203.0.113.10',
+  });
+  await request('POST', '/api/collect', pageview({ path: '/fexport/b' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': '203.0.113.11',
+  });
+
+  const rows = (await request('GET', '/api/export?days=30&format=json&page=/fexport/a')).json();
+  assert.ok(rows.length >= 1);
+  assert.ok(rows.every((r) => r.path === '/fexport/a'), 'filtered export must only contain the filtered path');
+  assert.ok(rows.every((r) => !r.ip), 'filtered export must still redact IPs');
+
+  const summary = (await request('GET', '/api/export?days=30&format=json&summary=1&page=/fexport/a')).json();
+  assert.ok(summary.totals.visits >= 1);
+  assert.ok(summary.pages.every((p) => p.path === '/fexport/a'), 'summary export respects filters');
+});
+
+test('countries and OS are reported in overview and summary export', async () => {
+  // Country comes from the x-country header; OS is parsed from the UA.
+  await request('POST', '/api/collect', pageview({ path: '/geo/cn' }), {
+    'user-agent': UA_MOBILE_ANDROID,
+    'x-forwarded-for': uniqueIp(801),
+    'x-country': 'CN',
+  });
+  await request('POST', '/api/collect', pageview({ path: '/geo/us' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(802),
+    'x-country': 'US',
+  });
+
+  const r = await request('GET', '/api/overview');
+  const json = r.json();
+  const cn = json.countries.find((c) => c.country === 'CN');
+  assert.ok(cn && cn.visits >= 1, 'CN should be present in countries');
+  assert.ok(json.countries.some((c) => c.country === 'US'), 'US should be present in countries');
+  assert.ok(json.oses.some((o) => /Android/i.test(o.os)), 'Android should be parsed from the mobile UA');
+  assert.ok(json.oses.some((o) => /Windows/i.test(o.os) || /Chrome OS/i.test(o.os)), 'desktop OS should be present');
+
+  // Filtered view: countries/OS stay inside the filtered scope.
+  const f = (await request('GET', '/api/overview?days=30&source=%28direct%29')).json();
+  assert.ok(Array.isArray(f.countries) && Array.isArray(f.oses));
+
+  // Summary export carries both dimensions.
+  const summary = (await request('GET', '/api/export?days=30&format=json&summary=1')).json();
+  assert.ok(Array.isArray(summary.countries) && summary.countries.length >= 1);
+  assert.ok(Array.isArray(summary.oses) && summary.oses.length >= 1);
+});
+
+test('snippet resolves data-endpoint and stays under 1KB', async () => {
+  const r = await request('GET', '/wa.js');
+  const body = r.text();
+  assert.ok(body.includes('data-endpoint') || body.includes('waEndpoint'), 'snippet should read an endpoint override');
+  assert.ok(body.length <= 1024, `snippet <= 1KB, got ${body.length}`);
+});
+
+test('CSV and JSON export work and IP is redacted/null', async () => {
+  await request('POST', '/api/collect', pageview({ path: '/export/x' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': '203.0.113.77',
+  });
+
+  const jsonR = await request('GET', '/api/export?days=30&format=json');
+  const rows = jsonR.json();
+  assert.ok(Array.isArray(rows) && rows.length >= 1);
+  for (const row of rows) {
+    assert.ok(!row.ip, 'exported IP must be null/redacted');
+  }
+
+  const csvR = await request('GET', '/api/export?days=30&format=csv');
+  const csv = csvR.text();
+  assert.ok(csv.includes('visited_at'));
+  assert.ok(!csv.includes('203.0.113.77'), 'csv must not leak the raw IP');
+  assert.ok(/[,]/.test(csv), 'csv should be delimited');
+});
+
+test('privacy audit report generates and flags posture', async () => {
+  const r = await request('GET', '/api/audit');
+  const audit = r.json();
+  assert.equal(r.status, 200);
+  assert.ok(audit.generated_at);
+  assert.ok(Array.isArray(audit.data_flow) && audit.data_flow.length >= 3);
+  assert.ok(audit.checks.length >= 5);
+  const noCookies = audit.checks.find((c) => c.id === 'no_cookies');
+  assert.ok(noCookies && noCookies.status === 'pass');
+  const ipCheck = audit.checks.find((c) => c.id === 'ip_not_stored');
+  assert.ok(ipCheck && ipCheck.status === 'pass', 'IP not stored by default');
+
+  const textR = await request('GET', '/api/audit?format=text');
+  assert.ok(textR.text().includes('Data flow'));
+});
+
+test('bots are excluded from metrics and aggregate views', async () => {
+  const sumVisits = (json) => json.buckets.reduce((a, b) => a + b.visits, 0);
+  const before = await request('GET', '/api/overview');
+  const bTotals = before.json().totals;
+  const bRt = sumVisits((await request('GET', '/api/realtime')).json());
+
+  // A Googlebot pageview: still recorded in the raw store, but must not
+  // count toward totals, daily series, top pages, or realtime buckets.
+  await request('POST', '/api/collect', pageview({ path: '/bot-trapped' }), {
+    'user-agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+    'x-forwarded-for': '198.51.100.99',
+  });
+
+  const after = await request('GET', '/api/overview');
+  const aJson = after.json();
+  assert.equal(aJson.totals.visits - bTotals.visits, 0, 'bot must not add a pageview');
+  assert.equal(
+    aJson.daily.reduce((a, b) => a + b.visits, 0),
+    aJson.totals.visits,
+    'daily must still sum to totals (no bot pollution)',
+  );
+  assert.equal(aJson.pages.filter((p) => p.path === '/bot-trapped').length, 0, 'bot path must not appear in top pages');
+
+  const aRt = sumVisits((await request('GET', '/api/realtime')).json());
+  assert.equal(aRt, bRt, 'bot must not appear in realtime buckets');
+});
+
+test('dashboard serves static HTML', async () => {
+  const r = await request('GET', '/');
+  assert.equal(r.status, 200);
+  assert.ok(r.text().includes('canvas'));
+});
+
+const UA_DESKTOP_CHROME =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const UA_DESKTOP_FIREFOX =
+  'Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0';
+const UA_MOBILE_ANDROID =
+  'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36';

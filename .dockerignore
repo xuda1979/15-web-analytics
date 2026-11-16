@@ -1,0 +1,12 @@
+node_modules
+data
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.git
+.gitignore
+Dockerfile
+.dockerignore
+.git*
+test
+coverage

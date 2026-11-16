@@ -1,0 +1,400 @@
+// Read-side analytics: time series, top lists, entry/exit, realtime, and CSV.
+
+import { config } from './config.js';
+import { dayKey, weekStart } from './store.js';
+
+export function dayKeysBetween(startMs, endMs) {
+  const keys = [];
+  const cur = new Date(startMs);
+  cur.setUTCHours(0, 0, 0, 0);
+  while (cur.getTime() <= endMs) {
+    keys.push(dayKey(cur.getTime()));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return keys;
+}
+
+// Ranges are upper-bound INCLUSIVE. The common dashboard query sets end to
+// Date.now() at read time; a pageview inserted in the same millisecond would
+// otherwise be invisible until the next request (ts < end excludes it).
+function whereClause(startMs, endMs) {
+  return { sql: 'ts >= ? AND ts <= ?', args: [startMs, endMs] };
+}
+
+// Pageviews + unique visitors per day for the requested range.
+export function dailySeries(db, startMs, endMs) {
+  const days = dayKeysBetween(startMs, endMs);
+  const rows = db
+    .prepare(
+      `SELECT day AS d, SUM(visits) AS visits, SUM(uniques) AS uniques
+       FROM agg_daily_realtime WHERE day >= ? AND day <= ?
+       GROUP BY day`,
+    )
+    .all(dayKey(startMs), dayKey(endMs));
+  const byDay = new Map(rows.map((r) => [r.d, r]));
+  return days.map((d) => {
+    const r = byDay.get(d);
+    return { date: d, visits: r ? Number(r.visits) : 0, uniques: r ? Number(r.uniques) : 0 };
+  });
+}
+
+export function weeklySeries(db, startMs, endMs) {
+  const sm = weekStart(startMs).getTime();
+  const em = endMs;
+  const rows = db
+    .prepare(
+      `SELECT start, SUM(visits) AS visits, SUM(uniques) AS uniques
+       FROM agg_monthly_buckets WHERE bucket='week' AND start >= ? AND start <= ?
+       GROUP BY start ORDER BY start`,
+    )
+    .all(sm, em);
+  const weeks = [];
+  for (let t = sm; t <= em; t += 7 * 24 * 3600 * 1000) weeks.push(t);
+  const byStart = new Map(rows.map((r) => [r.start, r]));
+  return weeks.map((t) => {
+    const r = byStart.get(t);
+    return {
+      week: new Date(t).toISOString().slice(0, 10),
+      start: t,
+      visits: r ? Number(r.visits) : 0,
+      uniques: r ? Number(r.uniques) : 0,
+    };
+  });
+}
+
+export function monthlySeries(db, startMs, endMs) {
+  const sm = new Date(startMs);
+  sm.setUTCDate(1);
+  sm.setUTCHours(0, 0, 0, 0);
+  const em = endMs;
+  const rows = db
+    .prepare(
+      `SELECT start, SUM(visits) AS visits, SUM(uniques) AS uniques
+       FROM agg_monthly_buckets WHERE bucket='month' AND start >= ? AND start <= ?
+       GROUP BY start ORDER BY start`,
+    )
+    .all(sm.getTime(), em);
+  const months = [];
+  for (let t = sm.getTime(); t <= em;) {
+    months.push(t);
+    const d = new Date(t);
+    d.setUTCMonth(d.getUTCMonth() + 1, 1);
+    d.setUTCHours(0, 0, 0, 0);
+    t = d.getTime();
+  }
+  const byStart = new Map(rows.map((r) => [r.start, r]));
+  return months.map((t) => {
+    const r = byStart.get(t);
+    return {
+      month: new Date(t).toISOString().slice(0, 7),
+      start: t,
+      visits: r ? Number(r.visits) : 0,
+      uniques: r ? Number(r.uniques) : 0,
+    };
+  });
+}
+
+function topQuery(db, groupCol, labelCol, startMs, endMs, limit) {
+  const w = whereClause(startMs, endMs);
+  return db
+    .prepare(
+      `SELECT ${groupCol} AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ${w.sql} AND is_bot = 0
+       GROUP BY ${groupCol} ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(...w.args, limit)
+    .map((r) => ({
+      [labelCol]: r.label,
+      visits: Number(r.visits),
+      uniques: Number(r.uniques),
+    }));
+}
+
+export function topPages(db, startMs, endMs, limit = 10) {
+  return topQuery(db, 'path', 'path', startMs, endMs, limit);
+}
+
+export function topSources(db, startMs, endMs, limit = 10) {
+  return db
+    .prepare(
+      `SELECT COALESCE(ref_domain, '(direct)') AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events WHERE ts >= ? AND ts <= ? AND is_bot = 0
+       GROUP BY label ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(startMs, endMs, limit)
+    .map((r) => ({
+      source: r.label,
+      visits: Number(r.visits),
+      uniques: Number(r.uniques),
+    }));
+}
+
+export function topDevices(db, startMs, endMs, limit = 10) {
+  return topQuery(db, 'device', 'device', startMs, endMs, limit);
+}
+
+export function topBrowsers(db, startMs, endMs, limit = 10) {
+  return topQuery(db, 'browser', 'browser', startMs, endMs, limit);
+}
+
+export function topCountries(db, startMs, endMs, limit = 10) {
+  return topQuery(db, 'country', 'country', startMs, endMs, limit);
+}
+
+export function topOses(db, startMs, endMs, limit = 10) {
+  return topQuery(db, 'os', 'os', startMs, endMs, limit);
+}
+
+// Entry and exit pages, counted per visit.
+//
+// The incremental `agg_daily_pages.entries/exits` counters are not maintained
+// here because they would need to track which event within a visit is the true
+// "last" one, and the provisional exit edge is only finalized by
+// refreshEntryExit. Instead we derive exact per-visit counts from `events`
+// using `visit_key` (the first event's ts, shared by every event of a visit):
+//   entries = the FIRST event of each visit   -> path of MIN(id) per visit_key
+//   exits   = the LAST  event of each visit   -> path of MAX(id) per visit_key
+// A 3-page visit contributes exactly one entry + one exit. Bots are excluded.
+export function entryExitPages(db, startMs, endMs, limit = 10) {
+  const w = whereClause(startMs, endMs);
+  const entries = db
+    .prepare(
+      `WITH first_of_visit AS (
+          SELECT path FROM events
+          WHERE ${w.sql} AND is_bot = 0 AND visit_key IS NOT NULL
+            AND id = (SELECT MIN(id) FROM events e2
+                      WHERE e2.visit_key = events.visit_key AND e2.is_bot = 0
+                        AND ${w.sql})
+       )
+       SELECT path, COUNT(*) AS visits
+       FROM first_of_visit GROUP BY path ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(...w.args, ...w.args, limit)
+    .map((r) => ({ path: r.path, visits: Number(r.visits) }));
+  const exits = db
+    .prepare(
+      `WITH last_of_visit AS (
+          SELECT path FROM events
+          WHERE ${w.sql} AND is_bot = 0 AND visit_key IS NOT NULL
+            AND id = (SELECT MAX(id) FROM events e2
+                      WHERE e2.visit_key = events.visit_key AND e2.is_bot = 0
+                        AND ${w.sql})
+       )
+       SELECT path, COUNT(*) AS visits
+       FROM last_of_visit GROUP BY path ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(...w.args, ...w.args, limit)
+    .map((r) => ({ path: r.path, visits: Number(r.visits) }));
+  return { entries, exits };
+}
+
+// Realtime: events in the last `windowMs`, grouped into 1m buckets.
+// The window is clamped at both ends ([start, now]) so a delayed/out-of-order
+// event with a future minute-stamp cannot inflate a bucket past `now`.
+export function realtime(db, now = Date.now()) {
+  const start = now - config.realtimeWindowMs;
+  const rows = db
+    .prepare(
+      `SELECT bucket1m, SUM(visits) AS visits, SUM(uniques) AS uniques
+       FROM agg_daily_realtime WHERE bucket1m >= ? AND bucket1m <= ?
+       GROUP BY bucket1m ORDER BY bucket1m`,
+    )
+    .all(start, now);
+  if (!rows.length) {
+    return { buckets: [], current: { visits: 0, uniques: 0 } };
+  }
+  const current = rows[rows.length - 1];
+  return {
+    buckets: rows.map((r) => ({
+      ts: Number(r.bucket1m),
+      visits: Number(r.visits),
+      uniques: Number(r.uniques),
+    })),
+    current: { visits: Number(current.visits), uniques: Number(current.uniques) },
+  };
+}
+
+export function totals(db, startMs, endMs) {
+  const w = whereClause(startMs, endMs);
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS visits, COUNT(DISTINCT guest_key) AS uniques
+       FROM events WHERE ${w.sql} AND is_bot = 0`,
+    )
+    .get(...w.args);
+  return { visits: Number(row?.visits || 0), uniques: Number(row?.uniques || 0) };
+}
+
+// ---- Filtered read paths ---------------------------------------------------
+// When page/source/device filters are active the aggregate caches (which only
+// carry the date dimension) cannot answer the query, so we fall back to a
+// direct read of `events`. The ts index bounds the scan and the dashboard
+// ranges are small; unfiltered views keep using the incremental caches.
+export function totalsFiltered(db, startMs, endMs, fq) {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS visits, COUNT(DISTINCT guest_key) AS uniques
+       FROM events WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}`,
+    )
+    .get(startMs, endMs, ...fq.args);
+  return { visits: Number(row?.visits || 0), uniques: Number(row?.uniques || 0) };
+}
+
+export function dailySeriesFiltered(db, startMs, endMs, fq) {
+  const days = dayKeysBetween(startMs, endMs);
+  const rows = db
+    .prepare(
+      `SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS d,
+              COUNT(*) AS visits,
+              COUNT(DISTINCT guest_key) AS uniques
+       FROM events
+       WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}
+       GROUP BY d`,
+    )
+    .all(startMs, endMs, ...fq.args);
+  const byDay = new Map(rows.map((r) => [r.d, r]));
+  return days.map((d) => {
+    const r = byDay.get(d);
+    return { date: d, visits: r ? Number(r.visits) : 0, uniques: r ? Number(r.uniques) : 0 };
+  });
+}
+
+export function weeklySeriesFiltered(db, startMs, endMs, fq) {
+  const rows = db
+    .prepare(
+      `SELECT strftime('%Y-%m-%d',
+                      (ts / 1000 - ((strftime('%w', ts / 1000, 'unixepoch') + 6) % 7) * 86400),
+                      'unixepoch') AS wk,
+              COUNT(*) AS visits,
+              COUNT(DISTINCT guest_key) AS uniques
+       FROM events
+       WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}
+       GROUP BY wk ORDER BY wk`,
+    )
+    .all(startMs, endMs, ...fq.args);
+  const sm = weekStart(startMs).getTime();
+  const weeks = [];
+  for (let t = sm; t <= endMs; t += 7 * 24 * 3600 * 1000) weeks.push(t);
+  const byKey = new Map(rows.map((r) => [r.wk, r]));
+  return weeks.map((t) => {
+    const key = new Date(t).toISOString().slice(0, 10);
+    const r = byKey.get(key);
+    return { week: key, start: t, visits: r ? Number(r.visits) : 0, uniques: r ? Number(r.uniques) : 0 };
+  });
+}
+
+export function monthlySeriesFiltered(db, startMs, endMs, fq) {
+  const rows = db
+    .prepare(
+      `SELECT strftime('%Y-%m', ts / 1000, 'unixepoch') AS mo,
+              COUNT(*) AS visits,
+              COUNT(DISTINCT guest_key) AS uniques
+       FROM events
+       WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}
+       GROUP BY mo ORDER BY mo`,
+    )
+    .all(startMs, endMs, ...fq.args);
+  const sm = new Date(startMs);
+  sm.setUTCDate(1);
+  sm.setUTCHours(0, 0, 0, 0);
+  const months = [];
+  for (let t = sm.getTime(); t <= endMs;) {
+    months.push(t);
+    const d = new Date(t);
+    d.setUTCMonth(d.getUTCMonth() + 1, 1);
+    d.setUTCHours(0, 0, 0, 0);
+    t = d.getTime();
+  }
+  const byKey = new Map(rows.map((r) => [r.mo, r]));
+  return months.map((t) => {
+    const key = new Date(t).toISOString().slice(0, 7);
+    const r = byKey.get(key);
+    return { month: key, start: t, visits: r ? Number(r.visits) : 0, uniques: r ? Number(r.uniques) : 0 };
+  });
+}
+
+function topQueryFiltered(db, groupCol, labelCol, startMs, endMs, limit, fq) {
+  return db
+    .prepare(
+      `SELECT ${groupCol} AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}
+       GROUP BY ${groupCol} ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(startMs, endMs, ...fq.args, limit)
+    .map((r) => ({
+      [labelCol]: r.label,
+      visits: Number(r.visits),
+      uniques: Number(r.uniques),
+    }));
+}
+
+export function topPagesFiltered(db, startMs, endMs, limit, fq) {
+  return topQueryFiltered(db, 'path', 'path', startMs, endMs, limit, fq);
+}
+
+export function topSourcesFiltered(db, startMs, endMs, limit, fq) {
+  return topQueryFiltered(db, `COALESCE(ref_domain, '(direct)')`, 'source', startMs, endMs, limit, fq);
+}
+
+export function topDevicesFiltered(db, startMs, endMs, limit, fq) {
+  return topQueryFiltered(db, 'device', 'device', startMs, endMs, limit, fq);
+}
+
+export function topBrowsersFiltered(db, startMs, endMs, limit, fq) {
+  return topQueryFiltered(db, 'browser', 'browser', startMs, endMs, limit, fq);
+}
+
+export function topCountriesFiltered(db, startMs, endMs, limit, fq) {
+  return topQueryFiltered(db, 'country', 'country', startMs, endMs, limit, fq);
+}
+
+export function topOsesFiltered(db, startMs, endMs, limit, fq) {
+  return topQueryFiltered(db, 'os', 'os', startMs, endMs, limit, fq);
+}
+
+export function entryExitFiltered(db, startMs, endMs, limit, fq) {
+  // Semantics: the filters apply to the VISIT, not to the edge row. A visit
+  // that touches the filtered page/source/device is included and reports its
+  // real first and last pages. So: 1) find the visit_keys that have at least
+  // one matching event inside the period, 2) return that visit's first/last.
+  const args = [startMs, endMs, ...fq.args];
+  const cond = ` AND ${fq.sql}`;
+  const scope = `WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND visit_key IS NOT NULL${cond}`;
+  const firstLast = (minmax) =>
+    db
+      .prepare(
+        `WITH matching_visits AS (
+            SELECT DISTINCT visit_key FROM events ${scope}
+         ),
+         edge AS (
+            SELECT e.visit_key, e.path,
+                   ${minmax === 'MIN' ? 'MIN(e.id)' : 'MAX(e.id)'} AS eid
+            FROM events e
+            JOIN matching_visits m USING (visit_key)
+            WHERE e.is_bot = 0 AND e.visit_key IS NOT NULL
+              AND e.ts >= ? AND e.ts <= ?
+            GROUP BY e.visit_key
+         )
+         SELECT e.path, COUNT(*) AS visits
+         FROM edge JOIN events e ON e.id = eid
+         GROUP BY e.path ORDER BY visits DESC LIMIT ?`,
+      )
+      .all(...args, startMs, endMs, limit)
+      .map((r) => ({ path: r.path, visits: Number(r.visits) }));
+
+  return { entries: firstLast('MIN'), exits: firstLast('MAX') };
+}
+
+export function toCsv(rows, columns) {
+  const esc = (v) => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const body = rows.map((r) => columns.map((c) => esc(r[c])).join(','));
+  return [columns.join(','), ...body].join('\n') + '\n';
+}

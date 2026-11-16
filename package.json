@@ -1,0 +1,31 @@
+{
+  "name": "15-web-analytics",
+  "version": "0.1.0",
+  "description": "China-compliant cookie-less website analytics (Plausible/Fathom slice). Fully self-hosted, SQLite-backed, single process.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch src/server.js",
+    "collect": "node --disable-warning=ExperimentalWarning src/cli.js collect",
+    "privacy-audit": "node --disable-warning=ExperimentalWarning src/cli.js audit",
+    "check": "node --disable-warning=ExperimentalWarning --test \"test/*.test.js\"",
+    "seed": "node --disable-warning=ExperimentalWarning src/cli.js seed"
+  },
+  "keywords": [
+    "analytics",
+    "privacy",
+    "cookie-less",
+    "sqlite",
+    "self-hosted",
+    "plausible",
+    "fathom"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "ua-parser-js": "^1.0.39"
+  }
+}
