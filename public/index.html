@@ -33,6 +33,8 @@
     <div class="kpi"><div class="n" id="kVisits">–</div><div class="l">Pageviews</div></div>
     <div class="kpi"><div class="n" id="kUniques">–</div><div class="l">Unique visitors</div></div>
     <div class="kpi"><div class="n" id="kNowV">–</div><div class="l">Right now (5m)</div></div>
+    <div class="kpi"><div class="n" id="kBounce">–</div><div class="l">Bounce rate</div></div>
+    <div class="kpi"><div class="n" id="kDur">–</div><div class="l">Avg visit</div></div>
   </div>
 
   <div class="card"><h3>Pageviews over time
@@ -91,6 +93,14 @@
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
+  }
+  function fmtDuration(ms) {
+    var s = Math.round(ms / 1000);
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60), r = s % 60;
+    if (m < 60) return m + 'm' + (r ? ' ' + r + 's' : '');
+    var h = Math.floor(m / 60);
+    return h + 'h ' + (m % 60) + 'm';
   }
 
   function bars(target, rows, labelKey, pctKey) {
@@ -155,6 +165,9 @@
       .then(function (data) {
         el('kVisits').textContent = data.totals.visits.toLocaleString();
         el('kUniques').textContent = data.totals.uniques.toLocaleString();
+        var vs = data.visit_stats || {};
+        el('kBounce').textContent = (vs.bounce_rate != null ? vs.bounce_rate : 0) + '%';
+        el('kDur').textContent = fmtDuration(vs.avg_duration_ms || 0);
         var labels = {};
         data.pages.forEach(function (p) { labels[p.path] = true; });
         data.sources.forEach(function (s) { labels[s.source] = true; });

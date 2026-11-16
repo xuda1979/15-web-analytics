@@ -228,6 +228,66 @@ export function totals(db, startMs, endMs) {
   return { visits: Number(row?.visits || 0), uniques: Number(row?.uniques || 0) };
 }
 
+// Visit-level engagement: sessions, bounces, and average duration. A visit is
+// all events sharing a `visit_key` (the first event's ts); sessions are the
+// distinct visit_keys with activity in the period. A visit counts as a bounce
+// when it contributes exactly one pageview. Duration is last - first event in
+// the period (single-event visits contribute 0), so the average stays honest
+// and cannot grow without multi-page sessions.
+export function visitStats(db, startMs, endMs) {
+  const row = db
+    .prepare(
+      `WITH visit_stats AS (
+          SELECT visit_key,
+                 COUNT(*) AS events,
+                 MIN(ts)   AS first_ts,
+                 MAX(ts)   AS last_ts
+          FROM events
+          WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND visit_key IS NOT NULL
+          GROUP BY visit_key
+       )
+       SELECT COUNT(*) AS sessions,
+              SUM(CASE WHEN events = 1 THEN 1 ELSE 0 END) AS bounces,
+              COALESCE(AVG(last_ts - first_ts), 0) AS avg_duration_ms
+       FROM visit_stats`,
+    )
+    .get(startMs, endMs);
+  return normalizeVisitStats(row);
+}
+
+export function visitStatsFiltered(db, startMs, endMs, fq) {
+  const row = db
+    .prepare(
+      `WITH visit_stats AS (
+          SELECT visit_key,
+                 COUNT(*) AS events,
+                 MIN(ts)   AS first_ts,
+                 MAX(ts)   AS last_ts
+          FROM events
+          WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND visit_key IS NOT NULL
+            AND ${fq.sql}
+          GROUP BY visit_key
+       )
+       SELECT COUNT(*) AS sessions,
+              SUM(CASE WHEN events = 1 THEN 1 ELSE 0 END) AS bounces,
+              COALESCE(AVG(last_ts - first_ts), 0) AS avg_duration_ms
+       FROM visit_stats`,
+    )
+    .get(startMs, endMs, ...fq.args);
+  return normalizeVisitStats(row);
+}
+
+function normalizeVisitStats(row) {
+  const sessions = Number(row?.sessions || 0);
+  const bounces = Number(row?.bounces || 0);
+  return {
+    sessions,
+    bounces,
+    bounce_rate: sessions ? Math.round((bounces / sessions) * 1000) / 10 : 0,
+    avg_duration_ms: Math.round(Number(row?.avg_duration_ms || 0)),
+  };
+}
+
 // ---- Filtered read paths ---------------------------------------------------
 // When page/source/device filters are active the aggregate caches (which only
 // carry the date dimension) cannot answer the query, so we fall back to a

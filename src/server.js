@@ -31,7 +31,9 @@ import {
   entryExitPages,
   realtime,
   totals,
+  visitStats,
   totalsFiltered,
+  visitStatsFiltered,
   dailySeriesFiltered,
   weeklySeriesFiltered,
   monthlySeriesFiltered,
@@ -183,6 +185,7 @@ function handleOverview(req, res) {
     const f = { sql: fq.sql, args: fq.args };
     body = {
       totals: totalsFiltered(db, start, end, f),
+      visit_stats: visitStatsFiltered(db, start, end, f),
       daily: dailySeriesFiltered(db, start, end, f),
       weekly: weeklySeriesFiltered(db, start, end, f),
       monthly: monthlySeriesFiltered(db, start, end, f),
@@ -199,6 +202,7 @@ function handleOverview(req, res) {
   } else {
     body = {
       totals: totals(db, start, end),
+      visit_stats: visitStats(db, start, end),
       daily: dailySeries(db, start, end),
       weekly: weeklySeries(db, start, end),
       monthly: monthlySeries(db, start, end),

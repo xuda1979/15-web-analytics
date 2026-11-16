@@ -13,7 +13,9 @@ import {
   topCountries,
   topOses,
   entryExitPages,
+  visitStats,
   totalsFiltered,
+  visitStatsFiltered,
   dailySeriesFiltered,
   weeklySeriesFiltered,
   monthlySeriesFiltered,
@@ -77,6 +79,7 @@ export function exportEvents(db, startMs, endMs, format = 'json', fq) {
 export function exportSummary(db, startMs, endMs, format = 'json', fq) {
   const summary = {
     totals: fq ? totalsFiltered(db, startMs, endMs, fq) : totals(db, startMs, endMs),
+    visit_stats: fq ? visitStatsFiltered(db, startMs, endMs, fq) : visitStats(db, startMs, endMs),
     daily: fq ? dailySeriesFiltered(db, startMs, endMs, fq) : dailySeries(db, startMs, endMs),
     weekly: fq ? weeklySeriesFiltered(db, startMs, endMs, fq) : weeklySeries(db, startMs, endMs),
     monthly: fq ? monthlySeriesFiltered(db, startMs, endMs, fq) : monthlySeries(db, startMs, endMs),

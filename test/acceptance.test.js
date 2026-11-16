@@ -256,6 +256,44 @@ test('countries and OS are reported in overview and summary export', async () =>
   assert.ok(Array.isArray(summary.oses) && summary.oses.length >= 1);
 });
 
+test('visit stats: bounce rate and average duration', async () => {
+  const base = (await request('GET', '/api/overview')).json().visit_stats || { sessions: 0, bounces: 0 };
+
+  // Visitor A: 3 pages in a row -> one non-bouncing session with duration.
+  await request('POST', '/api/collect', pageview({ path: '/vs/a1' }), {
+    'user-agent': 'UA-Visit-A',
+    'x-forwarded-for': uniqueIp(901),
+  });
+  await wait(5);
+  await request('POST', '/api/collect', pageview({ path: '/vs/a2' }), {
+    'user-agent': 'UA-Visit-A',
+    'x-forwarded-for': uniqueIp(901),
+  });
+  await wait(5);
+  await request('POST', '/api/collect', pageview({ path: '/vs/a3' }), {
+    'user-agent': 'UA-Visit-A',
+    'x-forwarded-for': uniqueIp(901),
+  });
+
+  // Visitor B: single page -> one bouncing session with zero duration.
+  await request('POST', '/api/collect', pageview({ path: '/vs/b1' }), {
+    'user-agent': 'UA-Visit-B',
+    'x-forwarded-for': uniqueIp(902),
+  });
+
+  const json = (await request('GET', '/api/overview')).json();
+  const vs = json.visit_stats;
+  assert.ok(vs, 'overview must include visit_stats');
+  assert.equal(vs.sessions - base.sessions, 2, 'two new sessions');
+  assert.equal(vs.bounces - base.bounces, 1, 'exactly one bounce (the single-page visit)');
+  assert.ok(vs.avg_duration_ms > 0, 'average duration reflects the multi-page visit');
+  assert.equal(vs.bounce_rate, Math.round((vs.bounces / vs.sessions) * 1000) / 10, 'bounce_rate agrees');
+
+  // Summary export carries visit stats too.
+  const summary = (await request('GET', '/api/export?days=30&format=json&summary=1')).json();
+  assert.ok(summary.visit_stats && summary.visit_stats.sessions >= 1);
+});
+
 test('snippet resolves data-endpoint and stays under 1KB', async () => {
   const r = await request('GET', '/wa.js');
   const body = r.text();
