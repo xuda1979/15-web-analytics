@@ -609,6 +609,68 @@ export function topReferrersFiltered(db, startMs, endMs, limit, fq) {
     .map((r) => ({ referrer: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
 }
 
+// New vs returning visitors. A guest is "returning" (for the queried range)
+// when any of their non-bot events predates the range start — i.e. we saw them
+// earlier in the global history. This is a pure read over `events`: no visitor
+// bookmark is persisted, the 30-minute visit window is irrelevant here, and the
+// label is a property of the guest's entire history, not of a single visit.
+// The `active` set constrains to guests with activity inside the range so the
+// split always sums to the range's unique count.
+export function returningStats(db, startMs, endMs) {
+  const w = whereClause(startMs, endMs);
+  const row = db
+    .prepare(
+      `WITH guest_first AS (
+          SELECT guest_key, MIN(ts) AS first_ts FROM events
+          WHERE is_bot = 0 AND guest_key IS NOT NULL
+          GROUP BY guest_key
+       ),
+       active AS (
+          SELECT DISTINCT guest_key FROM events
+          WHERE ${w.sql} AND is_bot = 0 AND guest_key IS NOT NULL
+       )
+       SELECT COUNT(*) AS guests,
+              SUM(CASE WHEN gf.first_ts < ? THEN 1 ELSE 0 END) AS returning_guests,
+              SUM(CASE WHEN gf.first_ts >= ? THEN 1 ELSE 0 END) AS new_guests
+       FROM active a JOIN guest_first gf USING (guest_key)`,
+    )
+    .get(...w.args, startMs, startMs);
+  return normalizeReturningStats(row);
+}
+
+export function returningStatsFiltered(db, startMs, endMs, fq) {
+  const row = db
+    .prepare(
+      `WITH guest_first AS (
+          SELECT guest_key, MIN(ts) AS first_ts FROM events
+          WHERE is_bot = 0 AND guest_key IS NOT NULL
+          GROUP BY guest_key
+       ),
+       active AS (
+          SELECT DISTINCT guest_key FROM events
+          WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND guest_key IS NOT NULL
+            AND ${fq.sql}
+       )
+       SELECT COUNT(*) AS guests,
+              SUM(CASE WHEN gf.first_ts < ? THEN 1 ELSE 0 END) AS returning_guests,
+              SUM(CASE WHEN gf.first_ts >= ? THEN 1 ELSE 0 END) AS new_guests
+       FROM active a JOIN guest_first gf USING (guest_key)`,
+    )
+    .get(startMs, endMs, ...fq.args, startMs, startMs);
+  return normalizeReturningStats(row);
+}
+
+function normalizeReturningStats(row) {
+  const guests = Number(row?.guests || 0);
+  const returning = Number(row?.returning_guests || 0);
+  return {
+    guests,
+    new_guests: Number(row?.new_guests || 0),
+    returning_guests: returning,
+    returning_pct: guests ? Math.round((returning / guests) * 1000) / 10 : 0,
+  };
+}
+
 export function entryExitFiltered(db, startMs, endMs, limit, fq) {
   // Semantics: the filters apply to the VISIT, not to the edge row. A visit
   // that touches the filtered page/source/device is included and reports its

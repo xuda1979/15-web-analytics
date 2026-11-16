@@ -55,6 +55,8 @@ import {
   entryExitFiltered,
   hourlySeries,
   hourlySeriesFiltered,
+  returningStats,
+  returningStatsFiltered,
 } from './analytics.js';
 import { exportEvents, exportSummary } from './exporter.js';
 import { generateAudit } from './audit.js';
@@ -213,6 +215,7 @@ function handleOverview(req, res) {
       referrers: topReferrersFiltered(db, start, end, 50, f),
       hourly: hourlySeriesFiltered(db, start, end, f),
       paths: entryExitFiltered(db, start, end, 50, f),
+      returning: returningStatsFiltered(db, start, end, f),
       range: { start, end, days: Math.round((end - start) / 864e5) },
       filters,
     };
@@ -235,6 +238,7 @@ function handleOverview(req, res) {
       referrers: topReferrers(db, start, end, 50),
       hourly: hourlySeries(db, start, end),
       paths: entryExitPages(db, start, end, 50),
+      returning: returningStats(db, start, end),
       range: { start, end, days: Math.round((end - start) / 864e5) },
       filters,
     };

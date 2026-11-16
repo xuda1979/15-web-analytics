@@ -688,6 +688,70 @@ test('retention prune deletes old events and keeps aggregates consistent', async
   assert.equal(after.totals.visits, before.totals.visits, 'prune must not remove recent events');
 });
 
+test('overview and summary export report new vs returning visitors against global history', async () => {
+  const { db } = await startServer();
+
+  // Imported lazily: these modules transitively read `config` at import time,
+  // so they must load AFTER helpers.js has booted the server with the test
+  // WA_* env vars (otherwise the cached config points at the prod ./data dir).
+  const { normalizeEvent, insertEvent } = await import('../src/collector.js');
+  const { loadOrCreateSecret } = await import('../src/privacy.js');
+  const { config } = await import('../src/config.js');
+  const secret = loadOrCreateSecret(config.dataDir);
+
+  // Give one guest a prior visit ~45 days ago — outside the 30-day default
+  // window, so in the `days=30` view that guest is "returning" while guests
+  // whose whole history sits inside the window are "new". Backdated via a
+  // direct insert (the server would overwrite ts with Date.now()).
+  const priorTs = Date.now() - 45 * 86_400_000 - 60_000;
+  const prior = normalizeEvent(
+    { path: '/returning/prior' },
+    { ip: uniqueIp(907), ua: UA_DESKTOP_CHROME },
+    secret,
+  );
+  prior.ts = priorTs;
+  prior.visited_at = new Date(priorTs).toISOString();
+  insertEvent(db, prior);
+
+  // Two fresh pageviews from distinct guests on a shared path (no referrer, so
+  // the source filter value is "(direct)").
+  await request('POST', '/api/collect', pageview({ path: '/returning/recent' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(907),
+  });
+  await request('POST', '/api/collect', pageview({ path: '/returning/recent' }), {
+    'user-agent': UA_DESKTOP_FIREFOX,
+    'x-forwarded-for': uniqueIp(908),
+  });
+  await wait(10);
+
+  // Plain view: the split is a partition of the range's unique guests, and the
+  // backdated guest (and only it) counts as returning. The exact absolute
+  // counts are covered by the filtered view below; here we assert the ratio
+  // invariants that hold regardless of sibling-test traffic.
+  const plain = (await request('GET', '/api/overview?days=30')).json();
+  const rp = plain.returning;
+  assert.equal(rp.guests, plain.totals.uniques, 'returning.guests equals unique visitors');
+  assert.equal(rp.guests, rp.new_guests + rp.returning_guests, 'new + returning sums to guests');
+  assert.equal(rp.returning_guests, 1, 'only the backdated guest is returning');
+  assert.ok(rp.new_guests >= 1, 'at least one guest is new');
+
+  // Filtered view scoped to the shared path: exact deterministic split.
+  const filtered = (await request('GET', '/api/overview?days=30&page=/returning/recent')).json();
+  assert.deepEqual(filtered.returning, { guests: 2, new_guests: 1, returning_guests: 1, returning_pct: 50 });
+
+  // Summary export mirrors the dimension in both plain and filtered scopes.
+  const sumPlain = (await request('GET', '/api/export?format=json&summary=1&days=30')).json();
+  assert.equal(sumPlain.returning.guests, sumPlain.totals.uniques, 'summary returning.guests equals uniques');
+  assert.equal(sumPlain.returning.returning_guests, 1, 'summary plain view sees the returning guest');
+  const sumFilt = (await request('GET', '/api/export?format=json&summary=1&days=30&page=/returning/recent')).json();
+  assert.deepEqual(sumFilt.returning, { guests: 2, new_guests: 1, returning_guests: 1, returning_pct: 50 });
+
+  // Raw export is unaffected (returning is a summary-only dimension).
+  const raw = (await request('GET', '/api/export?format=json&days=30')).json();
+  assert.ok(Array.isArray(raw), 'raw export is still an array');
+});
+
 test('overview and export honor from/to date-range filters', async () => {
   // Marker pageview inside the test's own window.
   await request('POST', '/api/collect', pageview({ path: '/range/in-window' }), {

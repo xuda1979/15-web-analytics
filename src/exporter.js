@@ -19,6 +19,8 @@ import {
   entryExitPages,
   hourlySeries,
   visitStats,
+  returningStats,
+  returningStatsFiltered,
   totalsFiltered,
   visitStatsFiltered,
   dailySeriesFiltered,
@@ -37,6 +39,7 @@ import {
   entryExitFiltered,
   hourlySeriesFiltered,
 } from './analytics.js';
+
 import { anonymizeIp } from './privacy.js';
 
 const EXPORT_COLUMNS = [
@@ -105,6 +108,7 @@ export function exportSummary(db, startMs, endMs, format = 'json', fq) {
     titles: fq ? topTitlesFiltered(db, startMs, endMs, 50, fq) : topTitles(db, startMs, endMs, 50),
     referrers: fq ? topReferrersFiltered(db, startMs, endMs, 50, fq) : topReferrers(db, startMs, endMs, 50),
     hourly: fq ? hourlySeriesFiltered(db, startMs, endMs, fq) : hourlySeries(db, startMs, endMs),
+    returning: fq ? returningStatsFiltered(db, startMs, endMs, fq) : returningStats(db, startMs, endMs),
     entries: fq ? entryExitFiltered(db, startMs, endMs, 50, fq).entries : entryExitPages(db, startMs, endMs, 50).entries,
     exits: fq ? entryExitFiltered(db, startMs, endMs, 50, fq).exits : entryExitPages(db, startMs, endMs, 50).exits,
   };
