@@ -11,6 +11,9 @@ function fmtBytes(n) {
 }
 
 export function generateAudit(db) {
+  const lastPrune = db
+    .prepare(`SELECT value FROM meta WHERE key = 'last_prune'`)
+    .get()?.value ?? null;
   const stats = db
     .prepare(`SELECT COUNT(*) AS events,
                      COUNT(*) FILTER (WHERE is_bot = 0) AS real_events,
@@ -74,6 +77,15 @@ export function generateAudit(db) {
       status: 'pass',
       detail: `All data lives in a single local SQLite file (${config.dbPath}). Nothing is transmitted off the box.`,
     },
+    {
+      id: 'data_retention',
+      label: 'Data retention',
+      status: 'pass',
+      detail:
+        config.retentionDays > 0
+          ? `Events older than ${config.retentionDays} days are pruned automatically (startup + every 6h) and on demand via npm run prune; last run: ${lastPrune || 'never'}.`
+          : 'Automatic pruning is disabled (WA_RETENTION_DAYS=0). Prune manually with `npm run prune`.',
+    },
   ];
 
   return {
@@ -124,6 +136,8 @@ export function generateAudit(db) {
       realtime_window_ms: config.realtimeWindowMs,
       store_ip: config.storeIp,
       hash_salt_set: config.hashSalt !== 'wa-local-salt',
+      retention_days: config.retentionDays,
+      last_prune: lastPrune,
     },
     checks,
     pass_count: checks.filter((c) => c.status === 'pass').length,

@@ -51,6 +51,10 @@ export const config = {
   collectRateLimit: int(process.env.WA_COLLECT_RATE_LIMIT, 60),
   collectRateWindowMs: int(process.env.WA_COLLECT_RATE_WINDOW_MS, 60_000),
 
+  // Data retention: events older than this many days are pruned on the
+  // configured schedule (startup + every 6h). 0 disables automatic pruning.
+  retentionDays: int(process.env.WA_RETENTION_DAYS, 0),
+
   snippetPath: process.env.WA_SNIPPET_PATH || '/wa.js',
   collectPath: process.env.WA_COLLECT_PATH || '/api/collect',
   overviewPath: process.env.WA_OVERVIEW_PATH || '/api/overview',

@@ -370,6 +370,86 @@ test('dashboard serves static HTML', async () => {
   assert.ok(r.text().includes('canvas'));
 });
 
+test('retention prune deletes old events and keeps aggregates consistent', async () => {
+  const { db } = await startServer();
+
+  // Imported lazily: these modules transitively read `config` at import time,
+  // so they must load AFTER helpers.js has booted the server with the test
+  // WA_* env vars (otherwise the cached config points at the prod ./data dir).
+  const { insertEvent } = await import('../src/collector.js');
+  const { pruneEvents } = await import('../src/retention.js');
+
+  // Baseline sums before pruning (dashboard invariant: series sum to totals).
+  const before = (await request('GET', '/api/overview?days=365')).json();
+  const beforeDaily = before.daily.reduce((a, b) => a + b.visits, 0);
+  const beforeMonthly = before.monthly.reduce((a, b) => a + b.visits, 0);
+  assert.equal(beforeDaily, before.totals.visits, 'daily sums to totals before prune');
+  assert.equal(beforeMonthly, before.totals.visits, 'monthly sums to totals before prune');
+
+  // A synthetic event far in the past (~400 days ago, minus a safety margin so
+  // it is strictly inside the retention window even if the two Date.now()
+  // calls below land in the same millisecond). Inserted directly so its
+  // timestamp is not overwritten by server-side Date.now().
+  const oldTs = Date.now() - 400 * 86_400_000 - 60_000;
+  insertEvent(db, {
+    ts: oldTs,
+    visited_at: new Date(oldTs).toISOString(),
+    guest_key: 'retention-old-guest',
+    path: '/retention/old',
+    referrer: null,
+    ref_domain: null,
+    title: null,
+    screen_w: null,
+    screen_h: null,
+    lang: null,
+    country: null,
+    ua: 'RetentionBot/1.0',
+    browser: 'Other',
+    browser_version: null,
+    device: 'desktop',
+    os: 'Other',
+    is_bot: 0,
+  });
+
+  // Confirm the old event is in the raw store before pruning. (Presence is
+  // checked against the DB rather than a wide-window overview because range
+  // boundaries (start = now - N days) sit a few ms after the synthetic ts.)
+  const beforeCount = db
+    .prepare(`SELECT COUNT(*) AS n FROM events WHERE guest_key = 'retention-old-guest'`)
+    .get().n;
+  assert.equal(beforeCount, 1, 'synthetic old event should be present before pruning');
+
+  // Prune everything strictly older than `cutoff` (recomputed after insert so
+  // oldTs is guaranteed to be inside the retention window by a comfortable
+  // margin).
+  const cutoff = Date.now() - 400 * 86_400_000;
+  const res = pruneEvents(db, cutoff);
+  assert.ok(res.deleted >= 1, `expected at least the synthetic event deleted, got ${res.deleted}`);
+
+  // The run is recorded.
+  const lastPrune = db.prepare(`SELECT value FROM meta WHERE key = 'last_prune'`).get();
+  assert.ok(lastPrune && lastPrune.value, 'meta.last_prune should be recorded');
+
+  // Old event is gone from the raw store.
+  const rawCount = db
+    .prepare(`SELECT COUNT(*) AS n FROM events WHERE guest_key = 'retention-old-guest'`)
+    .get().n;
+  assert.equal(rawCount, 0, 'pruned event must be deleted from the raw store');
+  const after = (await request('GET', '/api/overview?days=400')).json();
+  assert.ok(
+    !after.pages.some((p) => p.path === '/retention/old'),
+    'pruned event must not appear in top pages',
+  );
+
+  // Invariant: every series still sums to totals after the cache rebuild.
+  assert.equal(after.daily.reduce((a, b) => a + b.visits, 0), after.totals.visits, 'daily sums to totals after prune');
+  assert.equal(after.weekly.reduce((a, b) => a + b.visits, 0), after.totals.visits, 'weekly sums to totals after prune');
+  assert.equal(after.monthly.reduce((a, b) => a + b.visits, 0), after.totals.visits, 'monthly sums to totals after prune');
+
+  // Only the old event was removed; current traffic is untouched.
+  assert.equal(after.totals.visits, before.totals.visits, 'prune must not remove recent events');
+});
+
 const UA_DESKTOP_CHROME =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const UA_DESKTOP_FIREFOX =

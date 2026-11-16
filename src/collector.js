@@ -199,6 +199,20 @@ export function insertEvent(db, event) {
 // honoring the visit window. Called periodically to keep edges accurate as
 // sessions lengthen. Cheap for the fixture scale, and bounded by time range.
 export function refreshEntryExit(db, sinceMs = Date.now() - 24 * 3600 * 1000) {
+  db.exec('BEGIN');
+  try {
+    refreshEntryExitCore(db, sinceMs);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+// The core edge-refresh routine without transaction management, so callers
+// that already hold a transaction (e.g. pruneEvents) can reuse the exact same
+// logic without nesting BEGIN/COMMIT.
+export function refreshEntryExitCore(db, sinceMs) {
   const rows = db
     .prepare(
       `SELECT id, guest_key, ts, path, visit_key FROM events
@@ -237,29 +251,22 @@ export function refreshEntryExit(db, sinceMs = Date.now() - 24 * 3600 * 1000) {
   // started a visit carries a distinct visit_key, and an event that merely
   // continues a visit points at the same key. refreshEntryExit only needs to
   // keep the per-event columns accurate for raw exports and candidate reads.
-  db.exec('BEGIN');
-  try {
-    for (const all of byGuest.values()) {
-      let start = 0;
-      for (let i = 1; i <= all.length; i++) {
-        const gap = i < all.length ? all[i].ts - all[i - 1].ts : Infinity;
-        if (gap <= config.visitWindowMs && i < all.length) continue;
-        const frame = all.slice(start, i);
-        start = i;
-        if (!frame.length) continue;
-        const entry = frame[0].path;
-        const exit = frame[frame.length - 1].path;
-        for (const row of frame) {
-          if (row.entry_path !== entry || row.exit_path !== exit) {
-            update.run(entry, exit, row.visit_key, row.id);
-          }
+  for (const all of byGuest.values()) {
+    let start = 0;
+    for (let i = 1; i <= all.length; i++) {
+      const gap = i < all.length ? all[i].ts - all[i - 1].ts : Infinity;
+      if (gap <= config.visitWindowMs && i < all.length) continue;
+      const frame = all.slice(start, i);
+      start = i;
+      if (!frame.length) continue;
+      const entry = frame[0].path;
+      const exit = frame[frame.length - 1].path;
+      for (const row of frame) {
+        if (row.entry_path !== entry || row.exit_path !== exit) {
+          update.run(entry, exit, row.visit_key, row.id);
         }
-        setVisitKey(frame, frame[0].ts);
       }
+      setVisitKey(frame, frame[0].ts);
     }
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
   }
 }

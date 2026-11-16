@@ -6,6 +6,7 @@ import { config, ensureDataDir } from './config.js';
 import { openDb } from './store.js';
 import { loadOrCreateSecret } from './privacy.js';
 import { insertEvent, normalizeEvent, refreshEntryExit } from './collector.js';
+import { pruneEvents } from './retention.js';
 import { generateAudit } from './audit.js';
 
 const UA_POOL = {
@@ -28,30 +29,40 @@ export function seed(db, { days = 60, visitors = 12, verbose = false } = {}) {
   const start = Date.now() - days * 24 * 3600 * 1000;
   const refs = ['https://google.com/search', 'https://github.com/', '', 'https://news.ycombinator.com/', 'https://twitter.com/'];
   const uaKeys = Object.keys(UA_POOL).filter((k) => !k.startsWith('bot_'));
+  const spanMs = days * 24 * 3600 * 1000;
+  const nowFloor = Date.now() - 5 * 60 * 1000; // never seed "the future"
   let n = 0;
-  const step = 7 * 24 * 3600 * 1000 / (visitors * 6); // ~7 visits per visitor per week
 
   for (let v = 0; v < visitors; v++) {
     const ua = UA_POOL[uaKeys[v % uaKeys.length]];
     const ip = `192.168.${v % 8}.${20 + v}`;
-    const cur = new Date(start + Math.floor(Math.random() * 6) * 3600e3);
-    const pageviews = 4 + (v % 4);
-    for (let p = 0; p < pageviews; p++) {
-      const ts = Math.max(start, cur.getTime() + p * (45 + (v % 8) * 10) * 1000);
-      const path = PATHS[(v + p) % PATHS.length];
-      const payload = {
-        path,
-        referrer: p === 0 ? refs[v % refs.length] : '',
-        title: path.replace(/^\//, '') || 'Home',
-        sw: v % 2 ? 1440 : 390,
-        sh: v % 2 ? 900 : 844,
-        lang: v % 3 ? 'zh-CN' : 'en-US',
-      };
-      const event = normalizeEvent(payload, { ip, ua }, secret);
-      insertEvent(db, event);
-      n++;
-      const nextBase = ts + (60 + Math.random() * 240) * 1000;
-      cur.setTime(Math.min(nextBase, Date.now() - 5 * 60 * 1000));
+    const visits = 3 + (v % 3); // 3-5 visits spread across the window
+    for (let visit = 0; visit < visits; visit++) {
+      // Stagger each visitor's visits across the days so the demo shows a
+      // realistic daily/weekly curve instead of a wall at the boundary.
+      const dayOffset = ((v / visitors + visit / visits) % 1) * spanMs;
+      const cur = new Date(start + dayOffset + Math.floor(Math.random() * 6) * 3600e3);
+      const pageviews = 4 + (v % 4);
+      for (let p = 0; p < pageviews; p++) {
+        const ts = Math.min(
+          Math.max(start, cur.getTime() + p * (45 + (v % 8) * 10) * 1000),
+          nowFloor,
+        );
+        const path = PATHS[(v + p) % PATHS.length];
+        const payload = {
+          path,
+          referrer: p === 0 ? refs[v % refs.length] : '',
+          title: path.replace(/^\//, '') || 'Home',
+          sw: v % 2 ? 1440 : 390,
+          sh: v % 2 ? 900 : 844,
+          lang: v % 3 ? 'zh-CN' : 'en-US',
+        };
+        const event = normalizeEvent(payload, { ip, ua, ts }, secret);
+        insertEvent(db, event);
+        n++;
+        const nextBase = ts + (60 + Math.random() * 240) * 1000;
+        cur.setTime(Math.min(nextBase, nowFloor));
+      }
     }
   }
   // Add a couple of bot events (should be ignored by metrics).
@@ -73,11 +84,15 @@ function main() {
       seed(db, { verbose: true });
     } else if (cmd === 'collect') {
       collectOnce(db, rest);
+    } else if (cmd === 'prune') {
+      const days = int(pattern(rest, /^--days=(\d+)/), config.retentionDays || 30);
+      const res = pruneEvents(db, Date.now() - days * 24 * 3600 * 1000);
+      console.log(`prune: deleted ${res.deleted} events older than ${days} days`);
     } else if (cmd === 'audit') {
       const report = generateAudit(db);
       highlight(report);
     } else {
-      console.log('usage: node src/cli.js <seed|collect|audit>');
+      console.log('usage: node src/cli.js <seed|collect|prune|audit>');
     }
   } finally {
     db.close();

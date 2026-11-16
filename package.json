@@ -11,6 +11,7 @@
     "start": "node --disable-warning=ExperimentalWarning src/server.js",
     "dev": "node --disable-warning=ExperimentalWarning --watch src/server.js",
     "collect": "node --disable-warning=ExperimentalWarning src/cli.js collect",
+    "prune": "node --disable-warning=ExperimentalWarning src/cli.js prune",
     "privacy-audit": "node --disable-warning=ExperimentalWarning src/cli.js audit",
     "check": "node --disable-warning=ExperimentalWarning --test \"test/*.test.js\"",
     "seed": "node --disable-warning=ExperimentalWarning src/cli.js seed"

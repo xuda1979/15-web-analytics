@@ -29,6 +29,10 @@ local SQLite file, no third-party services.
 - CSV/JSON export with IP redaction.
 - Generated privacy-audit report documenting the data flow and compliance
   posture.
+- Optional automatic data retention: events older than `WA_RETENTION_DAYS`
+  are pruned on a schedule (startup + every 6h); `npm run prune` trims on
+  demand. Aggregate caches are rebuilt after pruning so every series keeps
+  summing to the totals.
 - Optional raw-IP storage (`WA_STORE_IP=1`) is honored but flagged by the
   audit report as a deliberate trade-off.
 
@@ -60,12 +64,14 @@ cookie-lessly when served from the same origin without any config.
 ```bash
 npm run seed             # simulate ~60 days of demo traffic
 npm run collect -- --path=/docs --referrer=https://github.com/ # record one pageview like a browser would
+npm run prune            # delete events older than WA_RETENTION_DAYS (default 30 or --days=N)
 npm run privacy-audit    # print the privacy audit report
 ```
 
 `collect` accepts `--path`, `--referrer`, `--title`, `--lang`, `--sw`,
 `--sh`, `--ip`, and `--ua`. Bots are excluded from metrics, matching the
-server. The `collect` and `seed` subcommands write into the configured
+server. `prune` accepts `--days=N` to override the retention window for a
+single run. The `collect` and `seed` subcommands write into the configured
 `WA_DATA_DIR` (`./data` by default).
 
 ## API
@@ -96,6 +102,7 @@ All settings are environment variables:
 | `WA_COLLECT_RATE_LIMIT` | `60` | Max collect POSTs per IP per rate window (`0` disables) |
 | `WA_COLLECT_RATE_WINDOW_MS` | `60000` | Rate-limit window for collect |
 | `WA_STORE_IP` | `0` | Set `1` to store cleartext IPs (audit flags this) |
+| `WA_RETENTION_DAYS` | `0` | Delete events older than this many days at startup + every 6h (`0` disables); the CLI `prune` subcommand runs it on demand |
 
 ## Storage & privacy
 

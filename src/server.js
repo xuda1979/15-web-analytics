@@ -18,6 +18,7 @@ import { openDb } from './store.js';
 import { loadOrCreateSecret } from './privacy.js';
 import { RateLimiter } from './ratelimit.js';
 import { insertEvent, normalizeEvent, refreshEntryExit } from './collector.js';
+import { pruneEvents } from './retention.js';
 import {
   dailySeries,
   weeklySeries,
@@ -412,6 +413,23 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     refreshEntryExit(db, Date.now() - 2 * 24 * 3600 * 1000);
   } catch (e) {
     console.error('startup refresh failed', e);
+  }
+  // Automatic data retention: prune events older than WA_RETENTION_DAYS at
+  // startup and every 6h. Disabled when WA_RETENTION_DAYS is 0/absent.
+  if (config.retentionDays > 0) {
+    const schedulePrune = () => {
+      try {
+        const cutoff = Date.now() - config.retentionDays * 24 * 3600 * 1000;
+        const { deleted } = pruneEvents(db, cutoff);
+        if (deleted > 0) {
+          console.log(`[retention] pruned ${deleted} events older than ${config.retentionDays}d`);
+        }
+      } catch (e) {
+        console.error('[retention] prune failed', e);
+      }
+    };
+    schedulePrune();
+    setInterval(schedulePrune, 6 * 3600 * 1000).unref();
   }
   serverStart();
 }
