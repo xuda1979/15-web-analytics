@@ -41,6 +41,21 @@ export function generateAudit(db) {
     .prepare(`SELECT name, (SELECT COUNT(*) FROM pragma_table_info(name)) AS cols
               FROM sqlite_master WHERE type='table' ORDER BY name`)
     .all();
+  // Scan the live schema for personal-identifier columns so the "no personal
+  // fields" claim is verified at report time instead of asserted in prose.
+  // sqlite_* tables (e.g. sqlite_sequence, created by AUTOINCREMENT) are
+  // SQLite bookkeeping internals, not part of the application schema, so they
+  // are excluded from the scan and the table listing.
+  const appTables = tableRows.filter((t) => !t.name.startsWith('sqlite_'));
+  const columnNames = [];
+  for (const t of appTables) {
+    for (const c of db.prepare(`SELECT name FROM pragma_table_info(?)`).all(t.name)) {
+      columnNames.push(c.name);
+    }
+  }
+  const personalColumns = columnNames.filter((c) =>
+    /name|email|phone|mobile|tel\b|wechat|qq|id_card|id_number|identity|credential|token|birth/i.test(c),
+  );
   // dbstat is a compile-time option; guard for trimmed Node builds.
   let dbBytes = 0;
   try {
@@ -63,8 +78,10 @@ export function generateAudit(db) {
     {
       id: 'no_personal_fields',
       label: 'Personal fields',
-      status: 'pass',
-      detail: 'Schema contains no name/email/phone or other personal identifiers.',
+      status: personalColumns.length ? 'fail' : 'pass',
+      detail: personalColumns.length
+        ? `Schema contains columns that look like personal identifiers: ${personalColumns.join(', ')}. Remove them for a privacy-first tracker.`
+        : `Schema scanned at report time: ${appTables.length} tables, ${columnNames.length} columns; no name, email, phone, or other personal identifier columns found.`,
     },
     {
       id: 'ip_not_stored',
@@ -136,7 +153,7 @@ export function generateAudit(db) {
       },
     ],
     schema: SCHEMA,
-    tables: tableRows,
+    tables: appTables,
     stats: {
       events: Number(stats.events),
       real_events: Number(stats.real_events),
