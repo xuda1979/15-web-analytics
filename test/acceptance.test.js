@@ -340,6 +340,39 @@ test('languages are reported in overview, summary, and raw export', async () => 
   assert.ok(rows.some((r) => r.lang === 'zh-CN'), 'raw export carries lang');
 });
 
+test('screen sizes are reported in overview, summary, and raw export', async () => {
+  // sw/sh travel with the snippet; post explicit pixel sizes and confirm the
+  // aggregated breakdown reports them as "WxH" labels.
+  await request('POST', '/api/collect', pageview({ path: '/screen/wide', sw: 2560, sh: 1440 }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(807),
+  });
+  await request('POST', '/api/collect', pageview({ path: '/screen/mobile', sw: 390, sh: 844 }), {
+    'user-agent': UA_MOBILE_ANDROID,
+    'x-forwarded-for': uniqueIp(808),
+  });
+
+  const json = (await request('GET', '/api/overview')).json();
+  const wide = json.screens.find((s) => s.screen === '2560x1440');
+  assert.ok(wide && wide.visits >= 1, '2560x1440 should be present in screens');
+  assert.ok(json.screens.some((s) => s.screen === '390x844'), '390x844 should be present in screens');
+
+  // Filtered view keeps the dimension inside the filtered scope.
+  const f = (await request('GET', '/api/overview?days=30&source=%28direct%29')).json();
+  assert.ok(Array.isArray(f.screens), 'screens stays a list under filters');
+
+  // Summary export carries the screen sizes dimension.
+  const summary = (await request('GET', '/api/export?days=30&format=json&summary=1')).json();
+  assert.ok(Array.isArray(summary.screens) && summary.screens.length >= 1);
+
+  // Raw JSON export already included the per-event sw/sh columns.
+  const rows = (await request('GET', '/api/export?days=30&format=json')).json();
+  const row = rows.find((r) => r.path === '/screen/wide');
+  assert.ok(row, 'wide screen event exported');
+  assert.equal(row.screen_w, 2560, 'raw export carries screen_w');
+  assert.equal(row.screen_h, 1440, 'raw export carries screen_h');
+});
+
 test('visit stats: bounce rate and average duration', async () => {
   const base = (await request('GET', '/api/overview')).json().visit_stats || { sessions: 0, bounces: 0 };
 

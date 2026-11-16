@@ -188,6 +188,23 @@ export function topLanguages(db, startMs, endMs, limit = 10) {
     .map((r) => ({ lang: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
 }
 
+// The screen_w/screen_h columns are captured at collect time and carried in
+// raw exports, but never aggregated. Surface them as a screen-size breakdown
+// ("1920x1080"). Rows missing either dimension are excluded.
+export function topScreens(db, startMs, endMs, limit = 10) {
+  const w = whereClause(startMs, endMs);
+  return db
+    .prepare(
+      `SELECT screen_w || 'x' || screen_h AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ${w.sql} AND is_bot = 0 AND screen_w IS NOT NULL AND screen_h IS NOT NULL
+       GROUP BY label ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(...w.args, limit)
+    .map((r) => ({ screen: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
+}
+
 // Entry and exit pages, counted per visit.
 //
 // The incremental `agg_daily_pages.entries/exits` counters are not maintained
@@ -470,6 +487,20 @@ export function topLanguagesFiltered(db, startMs, endMs, limit, fq) {
     )
     .all(startMs, endMs, ...fq.args, limit)
     .map((r) => ({ lang: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
+}
+
+export function topScreensFiltered(db, startMs, endMs, limit, fq) {
+  return db
+    .prepare(
+      `SELECT screen_w || 'x' || screen_h AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}
+         AND screen_w IS NOT NULL AND screen_h IS NOT NULL
+       GROUP BY label ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(startMs, endMs, ...fq.args, limit)
+    .map((r) => ({ screen: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
 }
 
 export function entryExitFiltered(db, startMs, endMs, limit, fq) {

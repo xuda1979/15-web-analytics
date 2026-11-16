@@ -30,6 +30,7 @@ import {
   topCountries,
   topOses,
   topLanguages,
+  topScreens,
   entryExitPages,
   realtime,
   totals,
@@ -46,6 +47,7 @@ import {
   topCountriesFiltered,
   topOsesFiltered,
   topLanguagesFiltered,
+  topScreensFiltered,
   entryExitFiltered,
 } from './analytics.js';
 import { exportEvents, exportSummary } from './exporter.js';
@@ -200,6 +202,7 @@ function handleOverview(req, res) {
       countries: topCountriesFiltered(db, start, end, 50, f),
       oses: topOsesFiltered(db, start, end, 50, f),
       languages: topLanguagesFiltered(db, start, end, 50, f),
+      screens: topScreensFiltered(db, start, end, 50, f),
       paths: entryExitFiltered(db, start, end, 50, f),
       range: { start, end, days: Math.round((end - start) / 864e5) },
       filters,
@@ -218,6 +221,7 @@ function handleOverview(req, res) {
       countries: topCountries(db, start, end, 50),
       oses: topOses(db, start, end, 50),
       languages: topLanguages(db, start, end, 50),
+      screens: topScreens(db, start, end, 50),
       paths: entryExitPages(db, start, end, 50),
       range: { start, end, days: Math.round((end - start) / 864e5) },
       filters,
