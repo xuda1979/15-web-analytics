@@ -398,6 +398,8 @@ test('dashboard serves static HTML', async () => {
   assert.ok(html.includes('id="fFrom"'), 'dashboard has a from-date input');
   assert.ok(html.includes('id="fTo"'), 'dashboard has a to-date input');
   assert.ok(/<option value="">Custom range<\/option>/.test(html), 'dashboard has a custom-range option');
+  // Effective-range readout element exists so the active window is visible.
+  assert.ok(html.includes('id="rangeLabel"'), 'dashboard has an effective-range readout');
 });
 
 test('retention prune deletes old events and keeps aggregates consistent', async () => {

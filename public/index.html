@@ -45,7 +45,7 @@
       <option value="daily" selected>Daily</option>
       <option value="weekly">Weekly</option>
       <option value="monthly">Monthly</option>
-    </select></h3><canvas id="chart"></canvas></div>
+    </select></h3><canvas id="chart"></canvas><div class="note" id="rangeLabel"></div></div>
 
   <div class="grid">
     <div class="card"><h3>Top pages</h3><div id="pages"></div></div>
@@ -69,7 +69,6 @@
 // Tiny dashboard client. No external dependencies, no cookies.
 (function () {
   var state = { days: 30, from: '', to: '', page: '', source: '', device: '', gran: 'daily' };
-  var svgNS = 'http://www.w3.org/2000/svg';
 
   function qs() {
     var p = new URLSearchParams(window.location.search);
@@ -88,6 +87,8 @@
   }
   // Apply the active range to a query object: either the preset days count or
   // an explicit from/to pair (sent as full-day UTC bounds so 'to' is inclusive).
+  // A custom range selection with no date set falls back to the preset days so
+  // the URL never carries a bare days=0.
   function applyRange(u) {
     u.searchParams.delete('days');
     u.searchParams.delete('from');
@@ -95,7 +96,7 @@
     if (state.from || state.to) {
       if (state.from) u.searchParams.set('from', state.from + 'T00:00:00.000Z');
       if (state.to) u.searchParams.set('to', state.to + 'T23:59:59.999Z');
-    } else {
+    } else if (state.days) {
       u.searchParams.set('days', String(state.days));
     }
   }
@@ -132,6 +133,12 @@
     if (m < 60) return m + 'm' + (r ? ' ' + r + 's' : '');
     var h = Math.floor(m / 60);
     return h + 'h ' + (m % 60) + 'm';
+  }
+  // Format a UTC epoch as YYYY-MM-DD for the range readout.
+  function dayLabel(ms) {
+    var d = new Date(ms);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate());
   }
 
   function bars(target, rows, labelKey, pctKey) {
@@ -187,6 +194,15 @@
     });
   }
 
+  function updateRangeControls() {
+    // Keep the preset select + date inputs in sync with the active range:
+    // preset days selects the matching option; any custom dates flip the
+    // select to "Custom range".
+    el('days').value = state.days ? String(state.days) : '';
+    el('fFrom').value = state.from;
+    el('fTo').value = state.to;
+  }
+
   function loadOverview() {
     // Keep export links in sync with the active filters + range.
     el('exportCsv').href = hrefWithFilters('/api/export?format=csv');
@@ -221,6 +237,11 @@
         drawChart((series || []).map(function (d) {
           return { label: String(d[labelKey]).slice(state.gran === 'daily' ? 5 : 0), visits: d.visits };
         }));
+        // Effective range readout: the server reports the actual window used.
+        var r = data.range;
+        if (r && r.start && r.end) {
+          el('rangeLabel').textContent = 'range: ' + dayLabel(r.start) + ' → ' + dayLabel(r.end);
+        }
       })
       .catch(function () { el('kVisits').textContent = 'err'; });
   }
@@ -253,9 +274,10 @@
     // A preset day count normally sets the range; picking it again resets any
     // custom from/to and any active page/source/device filters.
     el('days').addEventListener('change', function () {
-      state.days = Number(this.value);
+      state.days = this.value ? Number(this.value) : 30;
       state.from = state.to = '';
       state.page = state.source = state.device = '';
+      updateRangeControls();
       history.replaceState(null, '', '?' + viewParams().toString());
       loadOverview();
     });
@@ -266,6 +288,7 @@
         state.to = el('fTo').value;
         state.days = 0;
         if (state.from || state.to) state.page = state.source = state.device = '';
+        updateRangeControls();
         history.replaceState(null, '', '?' + viewParams().toString());
         loadOverview();
       });

@@ -67,8 +67,6 @@ const mime = {
   '.json': 'application/json',
 };
 
-const uaHeaders = new Set(['x-ua', 'user-agent', 'selenium', 'headless']);
-
 function parseRange(query, defaultDays = 30) {
   // `query` is a URLSearchParams (only .get() works, not property access).
   const now = Date.now();
