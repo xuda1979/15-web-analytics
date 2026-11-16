@@ -632,6 +632,7 @@ test('privacy audit report generates and flags posture', async () => {
   assert.ok(audit.checks.length >= 5);
   const noCookies = audit.checks.find((c) => c.id === 'no_cookies');
   assert.ok(noCookies && noCookies.status === 'pass');
+  assert.match(noCookies.detail, /\d+ files, \d+ lines/, 'audit verifies cookie-freedom against the shipped code scan');
   const ipCheck = audit.checks.find((c) => c.id === 'ip_not_stored');
   assert.ok(ipCheck && ipCheck.status === 'pass', 'IP not stored by default');
   const sizeCheck = audit.checks.find((c) => c.id === 'snippet_size');

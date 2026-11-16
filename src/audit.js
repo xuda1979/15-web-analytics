@@ -23,6 +23,45 @@ function fmtBytes(n) {
   return `${(n / 1024 ** 2).toFixed(1)} MB`;
 }
 
+// Scan the shipped code for cookie machinery, so the "no cookies /
+// identifiers" claim is verified at report time instead of asserted in
+// prose. Translational writes (Set-Cookie) have to live in the server
+// source, and client-side reads/writes (document.cookie, localStorage,
+// sessionStorage) have to live in the collect snippet — both are static
+// targets small enough to scan.
+function cookieEvidence() {
+  const targets = [
+    {
+      name: 'server source',
+      file: path.join(import.meta.dirname, 'server.js'),
+      pattern: /set-cookie/i,
+    },
+    {
+      name: 'collect snippet',
+      file: path.join(config.publicDir, 'wa.js'),
+      pattern: /document\.cookie|\.cookie\s*=|localStorage|sessionStorage/i,
+    },
+  ];
+  let files = 0;
+  let lines = 0;
+  const hits = [];
+  for (const t of targets) {
+    let text;
+    try {
+      text = fs.readFileSync(t.file, 'utf8');
+    } catch {
+      continue; // file absent — leave it out of the scanned set
+    }
+    files += 1;
+    const fileLines = text.split('\n');
+    lines += fileLines.length;
+    fileLines.forEach((line, i) => {
+      if (t.pattern.test(line)) hits.push(`${t.name}:${i + 1}: ${line.trim().slice(0, 90)}`);
+    });
+  }
+  return { files, lines, hits };
+}
+
 export function generateAudit(db) {
   const lastPrune = db
     .prepare(`SELECT value FROM meta WHERE key = 'last_prune'`)
@@ -68,12 +107,16 @@ export function generateAudit(db) {
 
   const snippetByteCount = snippetBytes();
 
+  const cookie = cookieEvidence();
+
   const checks = [
     {
       id: 'no_cookies',
       label: 'Cookies / identifiers',
-      status: 'pass',
-      detail: 'The collect endpoint never writes Set-Cookie. No tracking ID is issued; identity is reconstructed from an HMAC of ip+ua keyed with a local secret.',
+      status: cookie.hits.length ? 'fail' : 'pass',
+      detail: cookie.hits.length
+        ? `Cookie/local-storage machinery found in shipped code: ${cookie.hits.join('; ')}. A cookie-less tracker must not touch these APIs.`
+        : `No Set-Cookie writes in the server source and no cookie/localStorage API use in the collect snippet (scanned ${cookie.files} files, ${cookie.lines} lines). No tracking ID is issued; identity is reconstructed from an HMAC of ip+ua keyed with a local secret.`,
     },
     {
       id: 'no_personal_fields',
