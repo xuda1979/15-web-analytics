@@ -50,6 +50,8 @@ const EXPORT_COLUMNS = [
   'guest_key',
   'ip',
   'path',
+  'entry_path',
+  'exit_path',
   'referrer',
   'ref_domain',
   'title',

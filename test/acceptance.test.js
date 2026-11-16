@@ -449,6 +449,53 @@ test('device models are reported in overview, summary, and raw export', async ()
   assert.equal(row.device_model, 'Pixel 8', 'raw export carries device_model');
 });
 
+test('raw export carries the per-event entry/exit paths of each visit', async () => {
+  // One guest, a 3-page visit within the 30m window: entry stays /edge/start,
+  // the two later events are provisional exits ending at /edge/end.
+  const ip = uniqueIp(912);
+  await request('POST', '/api/collect', pageview({ path: '/edge/start' }), {
+    'user-agent': 'UA-Edge/1.0',
+    'x-forwarded-for': ip,
+  });
+  await wait(5);
+  await request('POST', '/api/collect', pageview({ path: '/edge/mid' }), {
+    'user-agent': 'UA-Edge/1.0',
+    'x-forwarded-for': ip,
+  });
+  await wait(5);
+  await request('POST', '/api/collect', pageview({ path: '/edge/end' }), {
+    'user-agent': 'UA-Edge/1.0',
+    'x-forwarded-for': ip,
+  });
+
+  const rows = (await request('GET', '/api/export?days=30&format=json')).json();
+  const start = rows.find((r) => r.path === '/edge/start');
+  const mid = rows.find((r) => r.path === '/edge/mid');
+  const end = rows.find((r) => r.path === '/edge/end');
+  assert.ok(start && mid && end, 'all three visit events exported');
+  assert.equal(start.entry_path, '/edge/start', 'visit entry is the first page');
+  assert.equal(start.exit_path, '/edge/start', 'first event is a provisional self-exit');
+  assert.equal(mid.entry_path, '/edge/start', 'visit entry is stable across events');
+  assert.equal(mid.exit_path, '/edge/mid', 'mid event is a provisional exit at itself');
+  assert.equal(end.entry_path, '/edge/start', 'visit entry remains the first page');
+  assert.equal(end.exit_path, '/edge/end', 'final event is the provisional exit');
+
+  // The CSV export carries the same edge columns.
+  const csv = (await request('GET', '/api/export?days=30&format=csv')).text();
+  const header = csv.split('\n')[0];
+  assert.ok(header.includes('entry_path') && header.includes('exit_path'), 'csv header has edge columns');
+
+  // A single-page export row is its own entry and exit.
+  await request('POST', '/api/collect', pageview({ path: '/edge/solo' }), {
+    'user-agent': 'UA-Edge/1.0',
+    'x-forwarded-for': uniqueIp(913),
+  });
+  const rows2 = (await request('GET', '/api/export?days=30&format=json')).json();
+  const solo = rows2.find((r) => r.path === '/edge/solo');
+  assert.equal(solo.entry_path, '/edge/solo', 'solo event is its own entry');
+  assert.equal(solo.exit_path, '/edge/solo', 'solo event is its own exit');
+});
+
 test('activity by hour of day: full 24h axis summing to totals', async () => {
   const base = (await request('GET', '/api/overview')).json().totals;
 
