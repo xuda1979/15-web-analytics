@@ -566,6 +566,33 @@ test('raw export carries the per-visit session key (visit_key)', async () => {
   assert.ok(header.includes('visit_key'), 'csv header has the session-key column');
 });
 
+test('raw export carries the full user-agent of each event', async () => {
+  // The ua column was persisted at collect time (guest-key HMAC input, device
+  // parsing) but had no read path. Post two events with distinct user-agent
+  // headers and confirm the raw export surfaces the exact string.
+  await request('POST', '/api/collect', pageview({ path: '/ua/chrome' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(933),
+  });
+  await wait(5);
+  await request('POST', '/api/collect', pageview({ path: '/ua/mobile' }), {
+    'user-agent': UA_MOBILE_ANDROID,
+    'x-forwarded-for': uniqueIp(934),
+  });
+
+  const rows = (await request('GET', '/api/export?days=30&format=json')).json();
+  const chrome = rows.find((r) => r.path === '/ua/chrome');
+  const mobile = rows.find((r) => r.path === '/ua/mobile');
+  assert.ok(chrome && mobile, 'both ua events exported');
+  assert.equal(chrome.ua, UA_DESKTOP_CHROME, 'raw export carries the desktop UA');
+  assert.equal(mobile.ua, UA_MOBILE_ANDROID, 'raw export carries the mobile UA');
+
+  // The CSV export carries the same column.
+  const csv = (await request('GET', '/api/export?days=30&format=csv')).text();
+  const header = csv.split('\n')[0];
+  assert.ok(header.includes('ua'), 'csv header has the user-agent column');
+});
+
 test('activity by hour of day: full 24h axis summing to totals', async () => {
   const base = (await request('GET', '/api/overview')).json().totals;
 

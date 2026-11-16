@@ -65,6 +65,7 @@ const EXPORT_COLUMNS = [
   'device',
   'device_model',
   'os',
+  'ua',
 ];
 
 const CSV_COLUMNS = EXPORT_COLUMNS.slice(1);
