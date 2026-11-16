@@ -35,13 +35,14 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 -- Daily aggregate caches (cache of last agg run; rebuilt incrementally).
+-- NOTE: entries/exits are NOT cached here - entry/exit counts are derived
+-- from the raw events table (entryExitPages/entryExitFiltered), so those
+-- columns were removed to avoid dead writes on the insert path.
 CREATE TABLE IF NOT EXISTS agg_daily_pages (
   d         TEXT NOT NULL,
   path      TEXT NOT NULL,
   visits    INTEGER NOT NULL DEFAULT 0,
   uniques   INTEGER NOT NULL DEFAULT 0,
-  entries   INTEGER NOT NULL DEFAULT 0,
-  exits     INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (d, path)
 );
 CREATE TABLE IF NOT EXISTS agg_daily_sources (

@@ -9,8 +9,7 @@
 //   2. wipes all agg caches,
 //   3. rebuilds them from the surviving non-bot events, replicating the exact
 //      write-through logic in insertEvent() (per-guest unique-visitor
-//      heuristic, visit-window splitting, entries/exits, realtime + monthly
-//      buckets),
+//      heuristic, visit-window splitting, realtime + monthly buckets),
 //   4. re-runs refreshEntryExit() so entry/exit edges reflect the pruned set,
 //   5. records the run in meta(last_prune).
 
@@ -71,10 +70,6 @@ export function pruneEvents(db, cutoffMs) {
         const dk = dayKey(r.ts);
 
         upsert(db, 'agg_daily_pages', { d: dk, path: r.path }, uniq);
-        db.prepare(
-          `UPDATE agg_daily_pages SET entries = entries + ?, exits = exits + ?
-           WHERE d = ? AND path = ?`,
-        ).run(uniq, uniq, dk, r.path);
 
         upsert(db, 'agg_daily_sources', { d: dk, source: r.ref_domain || '(direct)' }, uniq);
         upsert(db, 'agg_daily_devices', { d: dk, kind: r.device }, uniq);

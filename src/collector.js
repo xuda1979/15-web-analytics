@@ -150,16 +150,10 @@ export function insertEvent(db, event) {
     const dk = dayKey(event.ts);
     const uniqDelta = isUnique ? 1 : 0;
 
+    // Entry/exit edges are per-VISIT, not per event, and are counted from the
+    // raw `events` table (entryExitPages/entryExitFiltered), never from this
+    // cache — so no entries/exits columns are maintained here.
     upsert(db, 'agg_daily_pages', { d: dk, path: event.path }, uniqDelta);
-    // Entry/exit edges are per-VISIT, not per event. A visit begins at the
-    // unique event, so that event is (provisionally) both its entry and its
-    // exit; continuing events add neither. refreshEntryExit later rewrites the
-    // provisional edges on the events table (and the count below follows).
-    db.prepare(
-      `UPDATE agg_daily_pages SET entries = entries + ?, exits = exits + ?
-       WHERE d = ? AND path = ?`,
-    ).run(isUnique ? 1 : 0, isUnique ? 1 : 0, dk, event.path);
-
     upsert(db, 'agg_daily_sources', { d: dk, source: event.ref_domain || '(direct)' }, uniqDelta);
     upsert(db, 'agg_daily_devices', { d: dk, kind: event.device }, uniqDelta);
     upsert(db, 'agg_daily_browsers', { d: dk, browser: event.browser || 'Unknown' }, uniqDelta);
