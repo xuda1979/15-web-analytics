@@ -12,6 +12,7 @@ import {
   topBrowsers,
   topCountries,
   topOses,
+  topLanguages,
   entryExitPages,
   visitStats,
   totalsFiltered,
@@ -25,6 +26,7 @@ import {
   topBrowsersFiltered,
   topCountriesFiltered,
   topOsesFiltered,
+  topLanguagesFiltered,
   entryExitFiltered,
 } from './analytics.js';
 import { anonymizeIp } from './privacy.js';
@@ -90,6 +92,7 @@ export function exportSummary(db, startMs, endMs, format = 'json', fq) {
     browsers: fq ? topBrowsersFiltered(db, startMs, endMs, 50, fq) : topBrowsers(db, startMs, endMs, 50),
     countries: fq ? topCountriesFiltered(db, startMs, endMs, 50, fq) : topCountries(db, startMs, endMs, 50),
     oses: fq ? topOsesFiltered(db, startMs, endMs, 50, fq) : topOses(db, startMs, endMs, 50),
+    languages: fq ? topLanguagesFiltered(db, startMs, endMs, 50, fq) : topLanguages(db, startMs, endMs, 50),
     entries: fq ? entryExitFiltered(db, startMs, endMs, 50, fq).entries : entryExitPages(db, startMs, endMs, 50).entries,
     exits: fq ? entryExitFiltered(db, startMs, endMs, 50, fq).exits : entryExitPages(db, startMs, endMs, 50).exits,
   };

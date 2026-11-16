@@ -58,6 +58,7 @@
   <div class="grid">
     <div class="card"><h3>Countries</h3><div id="countries"></div></div>
     <div class="card"><h3>Operating systems</h3><div id="oses"></div></div>
+    <div class="card"><h3>Languages</h3><div id="languages"></div></div>
   </div>
   <div class="row2">
     <div class="card"><h3>Entry pages</h3><div id="entries"></div></div>
@@ -230,6 +231,7 @@
         }), 'browser', 'visits');
         bars('countries', data.countries, 'country', 'visits');
         bars('oses', data.oses, 'os', 'visits');
+        bars('languages', data.languages, 'lang', 'visits');
         table('entries', data.paths.entries, [{ k: 'path', h: 'Path' }, { k: 'visits', h: 'Entries', num: true }]);
         table('exits', data.paths.exits, [{ k: 'path', h: 'Path' }, { k: 'visits', h: 'Exits', num: true }]);
         var series = state.gran === 'monthly' ? data.monthly

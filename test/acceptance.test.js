@@ -310,6 +310,36 @@ test('browser versions are reported in overview, summary, and raw export', async
   assert.ok(csv.includes('browser_version'), 'csv header includes browser_version');
 });
 
+test('languages are reported in overview, summary, and raw export', async () => {
+  // lang travels with the pageview snippet (default 'en' in pageview helpers);
+  // post explicit values and confirm the aggregated breakdown picks them up.
+  await request('POST', '/api/collect', pageview({ path: '/lang/zh', lang: 'zh-CN' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(805),
+  });
+  await request('POST', '/api/collect', pageview({ path: '/lang/fr', lang: 'fr-FR' }), {
+    'user-agent': UA_DESKTOP_FIREFOX,
+    'x-forwarded-for': uniqueIp(806),
+  });
+
+  const json = (await request('GET', '/api/overview')).json();
+  const zh = json.languages.find((l) => l.lang === 'zh-CN');
+  assert.ok(zh && zh.visits >= 1, 'zh-CN should be present in languages');
+  assert.ok(json.languages.some((l) => l.lang === 'fr-FR'), 'fr-FR should be present in languages');
+
+  // Filtered view keeps the dimension inside the filtered scope.
+  const f = (await request('GET', '/api/overview?days=30&source=%28direct%29')).json();
+  assert.ok(Array.isArray(f.languages), 'languages stays a list under filters');
+
+  // Summary export carries the languages dimension.
+  const summary = (await request('GET', '/api/export?days=30&format=json&summary=1')).json();
+  assert.ok(Array.isArray(summary.languages) && summary.languages.length >= 1);
+
+  // Raw JSON export already included the lang column per event.
+  const rows = (await request('GET', '/api/export?days=30&format=json')).json();
+  assert.ok(rows.some((r) => r.lang === 'zh-CN'), 'raw export carries lang');
+});
+
 test('visit stats: bounce rate and average duration', async () => {
   const base = (await request('GET', '/api/overview')).json().visit_stats || { sessions: 0, bounces: 0 };
 

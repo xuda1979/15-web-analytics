@@ -170,6 +170,24 @@ export function topOses(db, startMs, endMs, limit = 10) {
   return topQuery(db, 'os', 'os', startMs, endMs, limit);
 }
 
+// The lang column is stored at collect time and carried in raw exports, but
+// has no other read path; surface it as a breakdown so the dashboard answers
+// "which languages are the visitors using?". Empty lang rows (payloads that
+// omitted it) are excluded via the IS NOT NULL guard — same as topSources.
+export function topLanguages(db, startMs, endMs, limit = 10) {
+  const w = whereClause(startMs, endMs);
+  return db
+    .prepare(
+      `SELECT lang AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ${w.sql} AND is_bot = 0 AND lang IS NOT NULL AND lang != ''
+       GROUP BY lang ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(...w.args, limit)
+    .map((r) => ({ lang: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
+}
+
 // Entry and exit pages, counted per visit.
 //
 // The incremental `agg_daily_pages.entries/exits` counters are not maintained
@@ -438,6 +456,20 @@ export function topCountriesFiltered(db, startMs, endMs, limit, fq) {
 
 export function topOsesFiltered(db, startMs, endMs, limit, fq) {
   return topQueryFiltered(db, 'os', 'os', startMs, endMs, limit, fq);
+}
+
+export function topLanguagesFiltered(db, startMs, endMs, limit, fq) {
+  return db
+    .prepare(
+      `SELECT lang AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}
+         AND lang IS NOT NULL AND lang != ''
+       GROUP BY lang ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(startMs, endMs, ...fq.args, limit)
+    .map((r) => ({ lang: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
 }
 
 export function entryExitFiltered(db, startMs, endMs, limit, fq) {

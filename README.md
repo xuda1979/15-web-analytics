@@ -21,8 +21,9 @@ local SQLite file, no third-party services.
 - Lightweight (~1KB) collect snippet that reports `path`, `referrer`, `title`,
   `screen`, and `lang` via `sendBeacon`/XHR.
 - Pageviews, unique visitors (IP-hash + UA + 30min visit window heuristic),
-  bounce rate, average visit duration, sources, devices, browsers, countries,
-  operating systems, and entry/exit pages.
+  bounce rate, average visit duration, sources, devices, browsers (with the
+  dominant version, e.g. "Chrome 120"), countries, operating systems, visitor
+  languages, and entry/exit pages.
 - Real-time view (last 5 minutes, per-minute buckets) and day / week / month
   aggregate views (the dashboard chart switches granularity).
 - Filters by page, source, device, and date range.
@@ -80,7 +81,7 @@ single run. The `collect` and `seed` subcommands write into the configured
 | --- | --- | --- |
 | `/wa.js` | GET | Collect snippet (no cookies) |
 | `/api/collect` | POST | Record a pageview (204) |
-| `/api/overview` | GET | Aggregate numbers (pageviews, uniques, sessions, bounce rate, avg visit duration), top lists (pages, sources, devices, browsers, countries, operating systems), daily/weekly/monthly series, filters (`page`, `source`, `device`, `days`, `from`, `to`) |
+| `/api/overview` | GET | Aggregate numbers (pageviews, uniques, sessions, bounce rate, avg visit duration), top lists (pages, sources, devices, browsers, countries, operating systems, languages), daily/weekly/monthly series, filters (`page`, `source`, `device`, `days`, `from`, `to`) |
 | `/api/realtime` | GET | Per-minute buckets for the last `WA_REALTIME_WINDOW_MS` |
 | `/api/export` | GET | Raw or summary data as CSV/JSON (`format=csv\|json`, `summary=1`); IP always redacted. Accepts the same `page` / `source` / `device` filters as `/api/overview` |
 | `/api/audit` | GET | Privacy audit report (`format=text` for plain text) |
