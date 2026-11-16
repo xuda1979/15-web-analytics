@@ -475,6 +475,39 @@ test('retention prune deletes old events and keeps aggregates consistent', async
   assert.equal(after.totals.visits, before.totals.visits, 'prune must not remove recent events');
 });
 
+test('overview and export honor from/to date-range filters', async () => {
+  // Marker pageview inside the test's own window.
+  await request('POST', '/api/collect', pageview({ path: '/range/in-window' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(903),
+  });
+  await wait(10);
+  const now = Date.now();
+
+  // A 60s window centered on the marker includes it; the marker path is
+  // unique, so the filtered count is exact regardless of sibling tests.
+  const from = new Date(now - 30_000).toISOString();
+  const to = new Date(now + 30_000).toISOString();
+  const qs = `page=/range/in-window&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+  const win = (await request('GET', `/api/overview?${qs}`)).json();
+  assert.equal(win.totals.visits, 1, 'marker lands inside the from/to window');
+  assert.equal(new Date(win.range.start).toISOString(), from, 'range.start reflects from');
+  assert.equal(new Date(win.range.end).toISOString(), to, 'range.end reflects to');
+
+  // A fully historical window contains nothing (from/to replace the days default).
+  const past = (await request('GET', '/api/overview?from=2015-01-01T00:00:00Z&to=2015-12-31T00:00:00Z')).json();
+  assert.equal(past.totals.visits, 0, 'historical window is empty');
+  assert.equal(past.daily.reduce((a, b) => a + b.visits, 0), 0, 'daily series is empty too');
+  assert.equal(past.range.start, Date.parse('2015-01-01T00:00:00Z'));
+  assert.equal(past.range.end, Date.parse('2015-12-31T00:00:00Z'));
+
+  // Same bounds slice both raw and summary export.
+  const rows = (await request('GET', '/api/export?format=json&from=2015-01-01T00:00:00Z&to=2015-12-31T00:00:00Z')).json();
+  assert.ok(Array.isArray(rows) && rows.length === 0, 'event export honors from/to');
+  const summary = (await request('GET', '/api/export?format=json&summary=1&from=2015-01-01T00:00:00Z&to=2015-12-31T00:00:00Z')).json();
+  assert.equal(summary.totals.visits, 0, 'summary export honors from/to');
+});
+
 const UA_DESKTOP_CHROME =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const UA_DESKTOP_FIREFOX =

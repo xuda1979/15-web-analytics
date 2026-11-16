@@ -70,18 +70,21 @@ const mime = {
 const uaHeaders = new Set(['x-ua', 'user-agent', 'selenium', 'headless']);
 
 function parseRange(query, defaultDays = 30) {
+  // `query` is a URLSearchParams (only .get() works, not property access).
   const now = Date.now();
-  let days = Number.parseInt(query.days, 10);
+  let days = Number.parseInt(query.get('days'), 10);
   if (!Number.isFinite(days) || days < 1) days = defaultDays;
   if (days > 3650) days = 3650;
   let end = now;
-  if (query.to) {
-    const t = Date.parse(query.to);
+  const toParam = query.get('to');
+  if (toParam) {
+    const t = Date.parse(toParam);
     if (Number.isFinite(t)) end = t;
   }
   let start = end - days * 24 * 3600 * 1000;
-  if (query.from) {
-    const f = Date.parse(query.from);
+  const fromParam = query.get('from');
+  if (fromParam) {
+    const f = Date.parse(fromParam);
     if (Number.isFinite(f)) start = f;
   }
   return { start, end };
