@@ -149,11 +149,16 @@
     return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate());
   }
 
+  // Full-axis renderer for every top list: the API serves up to 50 rows per
+  // list against a single shared scope, so truncating here to 10 (the old
+  // .slice(0, 10)) silently dropped rows 11+ from the cards — the same hidden
+  // cut the hours() fix removed from the hourly card. Render all served rows;
+  // each one already carries its distinct-uniques count from the same query.
   function bars(target, rows, labelKey, pctKey) {
     var host = el(target);
     if (!rows || !rows.length) { host.innerHTML = '<div class="empty">no data</div>'; return; }
     var max = Math.max.apply(null, rows.map(function (r) { return r[pctKey]; })) || 1;
-    host.innerHTML = rows.slice(0, 10).map(function (r) {
+    host.innerHTML = rows.map(function (r) {
       var pct = Math.round((r[pctKey] / max) * 100);
       // Every top-list row carries distinct uniques from the same query; show
       // them next to the visit count the way the hourly card does.
@@ -164,11 +169,9 @@
     }).join('');
   }
 
-  // Full-axis variant for fixed-size dimensions: unlike bars() it keeps every
-  // row (no .slice(0, 10)), so the 24-hour activity card shows all buckets —
-  // the API serves a complete zero-filled axis, and truncating it here would
-  // silently drop the later hours. The value column shows both the pageviews
-  // and the distinct uniques counted in that hour.
+  // Fixed-shape axes come pre-zero-filled from the API (24 buckets), and the
+  // value column shows both the pageviews and the distinct uniques counted in
+  // each hour. Like bars() it renders every served row.
   function hours(target, rows) {
     var host = el(target);
     if (!rows || !rows.length) { host.innerHTML = '<div class="empty">no data</div>'; return; }

@@ -831,8 +831,8 @@ test('dashboard serves static HTML', async () => {
   // Session count is computed by visit_stats but was never rendered; the KPI
   // row must expose it (bounce rate is derived from sessions/visits).
   assert.ok(html.includes('id="kSessions"'), 'dashboard has a sessions KPI');
-  // The activity-by-hour card renders the full 24-bucket axis (not the 10-row
-  // bar-truncation) and shows per-hour uniques next to each hour's visits.
+  // The activity-by-hour card renders the full 24-bucket axis and shows
+  // per-hour uniques next to each hour's visits.
   assert.ok(html.includes("function hours(target, rows)"), 'dashboard renders the full 24h axis');
   assert.ok(/uniq/.test(html), 'dashboard shows per-hour uniques');
   // Every top-list bar also carries the distinct-uniques count for that row
@@ -843,6 +843,14 @@ test('dashboard serves static HTML', async () => {
     'top-list bars show per-row uniques',
   );
   assert.ok(html.includes('var v = r[pctKey] +'), 'bar value column is built from visits (+ uniques)');
+  // Top lists must render every row the API serves: /api/overview returns up to
+  // 50 rows per list (server.js passes limit 50), so a bar card that truncates
+  // to 10 silently drops rows 11+ — the same hidden cut hours() was created to
+  // remove. bars() renders the full served list.
+  assert.ok(
+    !/rows.slice\(0,\s*10\)/.test(html),
+    'bars() and hours() render every row (no 10-row truncation)',
+  );
 });
 
 test('retention prune deletes old events and keeps aggregates consistent', async () => {
