@@ -95,6 +95,43 @@ function outboundEvidence() {
   return { files, lines, hits };
 }
 
+// Scan the server source for precise-geolocation machinery, so the
+// "region-level only" claim is verified at report time instead of asserted in
+// prose. The product's region signal is the optional x-country request header
+// read once in server.js (handleCollect) and stored in the events.country
+// column; any geo-IP/lookup source would contradict that. The scanner skips
+// its own source for the same self-match reason as outboundEvidence. Note the
+// pattern deliberately omits the literal word "geolocation": server.js ships a
+// Permissions-Policy: geolocation=() denial header, which is evidence FOR this
+// check (browser geolocation is blocked), not a violation.
+function regionEvidence() {
+  const dir = import.meta.dirname;
+  let files = 0;
+  let lines = 0;
+  const hits = [];
+  for (const f of fs.readdirSync(dir)) {
+    if (!f.endsWith('.js')) continue;
+    // The scanner's own source is skipped: its pattern is defined as a regex
+    // literal below, which would always self-match and create a false hit.
+    if (f === 'audit.js') continue;
+    let text;
+    try {
+      text = fs.readFileSync(path.join(dir, f), 'utf8');
+    } catch {
+      continue;
+    }
+    files += 1;
+    const fileLines = text.split('\n');
+    lines += fileLines.length;
+    const pattern =
+      /geoip|geolite|maxmind|ip2location|ip-api|ipinfo|ipwhois|latitude|longitude/i;
+    fileLines.forEach((line, i) => {
+      if (pattern.test(line)) hits.push(`${f}:${i + 1}: ${line.trim().slice(0, 90)}`);
+    });
+  }
+  return { files, lines, hits };
+}
+
 export function generateAudit(db) {
   const lastPrune = db
     .prepare(`SELECT value FROM meta WHERE key = 'last_prune'`)
@@ -142,6 +179,7 @@ export function generateAudit(db) {
 
   const cookie = cookieEvidence();
   const outbound = outboundEvidence();
+  const region = regionEvidence();
 
   const checks = [
     {
@@ -179,8 +217,10 @@ export function generateAudit(db) {
     {
       id: 'region_only',
       label: 'Country detection level',
-      status: 'pass',
-      detail: 'Region is derived from HTTP header country (e.g. x-country) at region granularity only; no precise geolocation.',
+      status: region.hits.length ? 'fail' : 'pass',
+      detail: region.hits.length
+        ? `Precise-geolocation machinery found in server source: ${region.hits.join('; ')}. A privacy-first tracker should only use the region-level signal.`
+        : `Region is derived only from the optional x-country HTTP header at collect time (server.js handleCollect); no precise-geolocation machinery in the server source (scanned ${region.files} files, ${region.lines} lines).`,
     },
     {
       id: 'local_storage',

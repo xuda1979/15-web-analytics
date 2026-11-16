@@ -636,6 +636,9 @@ test('privacy audit report generates and flags posture', async () => {
   const storageCheck = audit.checks.find((c) => c.id === 'local_storage');
   assert.ok(storageCheck && storageCheck.status === 'pass');
   assert.match(storageCheck.detail, /\d+ files, \d+ lines/, 'audit verifies storage locality against the server-source scan');
+  const regionCheck = audit.checks.find((c) => c.id === 'region_only');
+  assert.ok(regionCheck && regionCheck.status === 'pass');
+  assert.match(regionCheck.detail, /\d+ files, \d+ lines/, 'audit verifies the region level against the server-source scan');
   const ipCheck = audit.checks.find((c) => c.id === 'ip_not_stored');
   assert.ok(ipCheck && ipCheck.status === 'pass', 'IP not stored by default');
   const sizeCheck = audit.checks.find((c) => c.id === 'snippet_size');
