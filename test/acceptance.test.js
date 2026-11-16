@@ -641,6 +641,9 @@ test('dashboard serves static HTML', async () => {
   // Realtime per-minute buckets are drawn as a compact sparkline in the badge.
   assert.ok(html.includes('id="rtSpark"'), 'dashboard has a realtime sparkline canvas');
   assert.ok(html.includes('drawSpark(buckets)'), 'dashboard draws the realtime bucket sparkline');
+  // Session count is computed by visit_stats but was never rendered; the KPI
+  // row must expose it (bounce rate is derived from sessions/visits).
+  assert.ok(html.includes('id="kSessions"'), 'dashboard has a sessions KPI');
 });
 
 test('retention prune deletes old events and keeps aggregates consistent', async () => {

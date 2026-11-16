@@ -36,6 +36,7 @@
     <div class="kpi"><div class="n" id="kVisits">–</div><div class="l">Pageviews</div></div>
     <div class="kpi"><div class="n" id="kUniques">–</div><div class="l">Unique visitors</div></div>
     <div class="kpi"><div class="n" id="kNowV">–</div><div class="l">Right now (5m)</div></div>
+    <div class="kpi"><div class="n" id="kSessions">–</div><div class="l">Sessions</div></div>
     <div class="kpi"><div class="n" id="kBounce">–</div><div class="l">Bounce rate</div></div>
     <div class="kpi"><div class="n" id="kDur">–</div><div class="l">Avg visit</div></div>
     <div class="kpi"><div class="n" id="kReturn">–</div><div class="l">Returning visitors</div></div>
@@ -219,6 +220,7 @@
         el('kVisits').textContent = data.totals.visits.toLocaleString();
         el('kUniques').textContent = data.totals.uniques.toLocaleString();
         var vs = data.visit_stats || {};
+        el('kSessions').textContent = vs.sessions != null ? vs.sessions.toLocaleString() : '–';
         el('kBounce').textContent = (vs.bounce_rate != null ? vs.bounce_rate : 0) + '%';
         el('kDur').textContent = fmtDuration(vs.avg_duration_ms || 0);
         var rt = data.returning || {};
