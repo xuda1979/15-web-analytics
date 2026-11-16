@@ -162,8 +162,22 @@ export function topBrowsers(db, startMs, endMs, limit = 10) {
   return attachBrowserVersions(db, rows, startMs, endMs, '', []);
 }
 
+// The country column is populated from the x-country header and is NULL when a
+// visit carries no resolved region. Exclude unknown/empty rows so the breakdown
+// never shows a literal "null" label — same policy as languages, screens,
+// titles, and referrers. Regionless traffic still counts toward totals.
 export function topCountries(db, startMs, endMs, limit = 10) {
-  return topQuery(db, 'country', 'country', startMs, endMs, limit);
+  const w = whereClause(startMs, endMs);
+  return db
+    .prepare(
+      `SELECT country AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ${w.sql} AND is_bot = 0 AND country IS NOT NULL AND country != ''
+       GROUP BY country ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(...w.args, limit)
+    .map((r) => ({ country: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
 }
 
 export function topOses(db, startMs, endMs, limit = 10) {
@@ -508,8 +522,20 @@ export function topBrowsersFiltered(db, startMs, endMs, limit, fq) {
   return attachBrowserVersions(db, rows, startMs, endMs, fq.sql, fq.args);
 }
 
+// See topCountries: unknown/empty country rows are excluded from the
+// breakdown so the filtered view never shows a "null" country label.
 export function topCountriesFiltered(db, startMs, endMs, limit, fq) {
-  return topQueryFiltered(db, 'country', 'country', startMs, endMs, limit, fq);
+  return db
+    .prepare(
+      `SELECT country AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}
+         AND country IS NOT NULL AND country != ''
+       GROUP BY country ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(startMs, endMs, ...fq.args, limit)
+    .map((r) => ({ country: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
 }
 
 export function topOsesFiltered(db, startMs, endMs, limit, fq) {

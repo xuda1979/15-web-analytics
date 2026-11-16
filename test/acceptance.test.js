@@ -281,6 +281,38 @@ test('countries and OS are reported in overview and summary export', async () =>
   assert.ok(Array.isArray(summary.oses) && summary.oses.length >= 1);
 });
 
+test('regionless visits do not produce a null country breakdown row', async () => {
+  // A visit without an x-country header leaves `country` NULL. The countries
+  // breakdown must exclude unknown rows (same policy as languages/screens/
+  // titles/referrers) instead of rendering a literal "null" label — while the
+  // regionless event still counts toward totals and daily series.
+  await request('POST', '/api/collect', pageview({ path: '/geo/none' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(809),
+    // no x-country header
+  });
+
+  const json = (await request('GET', '/api/overview')).json();
+  assert.ok(
+    Array.isArray(json.countries),
+    'overview must return a countries array',
+  );
+  assert.ok(
+    !json.countries.some((c) => c.country === null || c.country === 'null' || c.country === ''),
+    'countries must not carry a null/empty label',
+  );
+  const totals = await request('GET', '/api/overview');
+  assert.notEqual(totals.json().totals.visits, 0, 'regionless visits still count toward totals');
+
+  // The filtered view applies the same exclusion.
+  const f = (await request('GET', '/api/overview?days=30&page=%2Fgeo%2Fnone')).json();
+  assert.ok(Array.isArray(f.countries), 'filtered countries must be an array');
+  assert.ok(
+    !f.countries.some((c) => c.country === null || c.country === 'null' || c.country === ''),
+    'filtered countries must not carry a null/empty label',
+  );
+});
+
 test('browser versions are reported in overview, summary, and raw export', async () => {
   await request('POST', '/api/collect', pageview({ path: '/browser/chrome' }), {
     'user-agent': UA_DESKTOP_CHROME,
