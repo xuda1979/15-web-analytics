@@ -51,6 +51,7 @@
     <div class="card"><h3>Top pages</h3><div id="pages"></div></div>
     <div class="card"><h3>Top sources</h3><div id="sources"></div></div>
     <div class="card"><h3>Page titles</h3><div id="titles"></div></div>
+    <div class="card"><h3>Referring pages</h3><div id="referrers"></div></div>
   </div>
   <div class="grid">
     <div class="card"><h3>Devices</h3><div id="devices"></div></div>
@@ -229,6 +230,7 @@
         bars('pages', data.pages, 'path', 'visits');
         bars('sources', data.sources, 'source', 'visits');
         bars('titles', data.titles, 'title', 'visits');
+        bars('referrers', data.referrers, 'referrer', 'visits');
         bars('devices', data.devices, 'device', 'visits');
         bars('browsers', (data.browsers || []).map(function (b) {
           return { browser: b.version ? b.browser + ' ' + b.version : b.browser, visits: b.visits, uniques: b.uniques };

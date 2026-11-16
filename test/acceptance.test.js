@@ -448,6 +448,40 @@ test('page titles are reported in overview, summary, and raw export', async () =
   assert.equal(row.title, 'First Article', 'raw export carries title');
 });
 
+test('referring pages are reported in overview, summary, and raw export', async () => {
+  // referrer carries the full referring URL; the aggregate should group by it
+  // (not just the ref_domain hostname) so specific referring pages show up.
+  await request('POST', '/api/collect', pageview({ path: '/ref/one', referrer: 'https://github.com/xuda1979/15-web-analytics/issues/42' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(905),
+  });
+  await wait(5);
+  await request('POST', '/api/collect', pageview({ path: '/ref/two', referrer: 'https://news.ycombinator.com/item?id=41000001' }), {
+    'user-agent': UA_DESKTOP_FIREFOX,
+    'x-forwarded-for': uniqueIp(906),
+  });
+
+  const json = (await request('GET', '/api/overview')).json();
+  assert.ok(Array.isArray(json.referrers), 'referrers should be an array');
+  const gh = json.referrers.find((r) => r.referrer === 'https://github.com/xuda1979/15-web-analytics/issues/42');
+  assert.ok(gh && gh.visits >= 1, 'the GitHub referring page should be present');
+  assert.ok(json.referrers.some((r) => r.referrer === 'https://news.ycombinator.com/item?id=41000001'), 'the HN referring page should be present');
+
+  // Filtered view keeps the dimension inside the filtered scope.
+  const f = (await request('GET', '/api/overview?days=30&source=%28direct%29')).json();
+  assert.ok(Array.isArray(f.referrers), 'referrers stays a list under filters');
+
+  // Summary export carries the referrers dimension.
+  const summary = (await request('GET', '/api/export?days=30&format=json&summary=1')).json();
+  assert.ok(Array.isArray(summary.referrers) && summary.referrers.some((r) => r.referrer === 'https://github.com/xuda1979/15-web-analytics/issues/42'));
+
+  // Raw JSON export already carried the per-event referrer column.
+  const rows = (await request('GET', '/api/export?days=30&format=json')).json();
+  const row = rows.find((r) => r.path === '/ref/one');
+  assert.ok(row, 'referrer event exported');
+  assert.equal(row.referrer, 'https://github.com/xuda1979/15-web-analytics/issues/42', 'raw export carries referrer');
+});
+
 test('visit stats: bounce rate and average duration', async () => {
   const base = (await request('GET', '/api/overview')).json().visit_stats || { sessions: 0, bounces: 0 };
 

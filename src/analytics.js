@@ -576,6 +576,39 @@ export function topTitlesFiltered(db, startMs, endMs, limit, fq) {
     .map((r) => ({ title: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
 }
 
+// The referrer column holds the full referring URL, while ref_domain reduces
+// it to a hostname label for the sources breakdown. Surface the full URL as a
+// referring-pages breakdown so the dashboard answers "which specific pages are
+// sending traffic?" (e.g. github.com/owner/repo vs news.ycombinator.com/item).
+// Empty referrers (direct traffic) are excluded, same as the title/source rows.
+export function topReferrers(db, startMs, endMs, limit = 10) {
+  const w = whereClause(startMs, endMs);
+  return db
+    .prepare(
+      `SELECT referrer AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ${w.sql} AND is_bot = 0 AND referrer IS NOT NULL AND referrer != ''
+       GROUP BY referrer ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(...w.args, limit)
+    .map((r) => ({ referrer: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
+}
+
+export function topReferrersFiltered(db, startMs, endMs, limit, fq) {
+  return db
+    .prepare(
+      `SELECT referrer AS label, COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}
+         AND referrer IS NOT NULL AND referrer != ''
+       GROUP BY referrer ORDER BY visits DESC LIMIT ?`,
+    )
+    .all(startMs, endMs, ...fq.args, limit)
+    .map((r) => ({ referrer: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
+}
+
 export function entryExitFiltered(db, startMs, endMs, limit, fq) {
   // Semantics: the filters apply to the VISIT, not to the edge row. A visit
   // that touches the filtered page/source/device is included and reports its
