@@ -132,6 +132,33 @@ test('unique-visitor heuristic: 2 distinct visitors over multiple pages', async 
   assert.equal(uniques, 2, '2 unique visitors despite shared UA');
 });
 
+test('top-list rows carry per-row uniques next to visits', async () => {
+  // One path gets two distinct visitors, a second path gets a single one.
+  await request('POST', '/api/collect', pageview({ path: '/uniq/two' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(921),
+  });
+  await wait(5);
+  await request('POST', '/api/collect', pageview({ path: '/uniq/two' }), {
+    'user-agent': UA_DESKTOP_FIREFOX,
+    'x-forwarded-for': uniqueIp(922),
+  });
+  await request('POST', '/api/collect', pageview({ path: '/uniq/one' }), {
+    'user-agent': UA_DESKTOP_CHROME,
+    'x-forwarded-for': uniqueIp(923),
+  });
+
+  const json = (await request('GET', '/api/overview')).json();
+  const two = json.pages.find((p) => p.path === '/uniq/two');
+  const one = json.pages.find((p) => p.path === '/uniq/one');
+  assert.equal(two.visits, 2, 'two pageviews on the shared path');
+  assert.equal(two.uniques, 2, 'two distinct guests visited the shared path');
+  assert.equal(one.visits, 1, 'one pageview on the single-visitor path');
+  assert.equal(one.uniques, 1, 'one distinct guest on the single-visitor path');
+  const sources = json.sources.find((s) => s.source === '(direct)');
+  assert.ok(sources && sources.uniques >= 3, 'uniques are also computed for the source breakdown');
+});
+
 test('daily and weekly aggregation are correct on fixture data', async () => {
   // Seed a handful of controlled events with known timestamps.
   const { server } = await startServer();
@@ -753,6 +780,14 @@ test('dashboard serves static HTML', async () => {
   // bar-truncation) and shows per-hour uniques next to each hour's visits.
   assert.ok(html.includes("function hours(target, rows)"), 'dashboard renders the full 24h axis');
   assert.ok(/uniq/.test(html), 'dashboard shows per-hour uniques');
+  // Every top-list bar also carries the distinct-uniques count for that row
+  // (same "visits / N uniq" style as the hourly card): bars() appends it to
+  // the value column when the row exposes an uniques field.
+  assert.ok(
+    html.includes("r[pctKey] + (r.uniques != null ? ' / ' + r.uniques + ' uniq' : '')"),
+    'top-list bars show per-row uniques',
+  );
+  assert.ok(html.includes('var v = r[pctKey] +'), 'bar value column is built from visits (+ uniques)');
 });
 
 test('retention prune deletes old events and keeps aggregates consistent', async () => {

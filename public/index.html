@@ -155,9 +155,12 @@
     var max = Math.max.apply(null, rows.map(function (r) { return r[pctKey]; })) || 1;
     host.innerHTML = rows.slice(0, 10).map(function (r) {
       var pct = Math.round((r[pctKey] / max) * 100);
+      // Every top-list row carries distinct uniques from the same query; show
+      // them next to the visit count the way the hourly card does.
+      var v = r[pctKey] + (r.uniques != null ? ' / ' + r.uniques + ' uniq' : '');
       return '<div class="bar"><span class="label">' + esc(r[labelKey]) + '</span>' +
         '<span class="track"><span class="fill" style="width:' + pct + '%"></span></span>' +
-        '<span class="v">' + r[pctKey] + '</span></div>';
+        '<span class="v">' + v + '</span></div>';
     }).join('');
   }
 
