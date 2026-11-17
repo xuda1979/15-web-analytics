@@ -167,3 +167,48 @@ test('prune: bot events are deleted but stay absent from metrics', () => {
 
   db.close();
 });
+
+test('prune: a mid-rebuild failure rolls back the partial delete (atomicity)', () => {
+  const { db, secret } = fresh();
+  const now = Date.now();
+
+  // Two events: one older than the cutoff (so the DELETE qualifies), one
+  // recent. The inserts write both series caches (write-through), so a
+  // mid-rebuild failure must restore every side effect, not just the raw rows.
+  post(db, secret, { pathname: '/atomic-old', ip: '10.7.0.1', ua: 'UA-AT', ts: now - 30 * DAY });
+  post(db, secret, { pathname: '/atomic-new', ip: '10.7.0.2', ua: 'UA-AT', ts: now - 1 * DAY });
+
+  const rows = () => ({
+    events: db.prepare('SELECT COUNT(*) n FROM events').get().n,
+    rt: db.prepare('SELECT COUNT(*) n FROM agg_daily_realtime').get().n,
+    buckets: db.prepare('SELECT COUNT(*) n FROM agg_monthly_buckets').get().n,
+  });
+  const before = rows();
+
+  // Sabotage the rebuild: a trigger fires on the very first INSERT into
+  // agg_daily_realtime, i.e. after pruneEvents has already DELETEd the old
+  // events and wiped both caches inside the transaction.
+  db.exec(`
+    CREATE TRIGGER fail_rebuild BEFORE INSERT ON agg_daily_realtime
+    BEGIN SELECT RAISE(ABORT, 'sabotage: rebuild insert'); END
+  `);
+
+  try {
+    assert.throws(() => pruneEvents(db, now - 5 * DAY), 'the rebuild failure propagates');
+  } finally {
+    db.exec('DROP TRIGGER IF EXISTS fail_rebuild');
+  }
+
+  // The ROLLBACK in pruneEvents' catch undid the DELETE and cache wipes: every
+  // table sits exactly as it did before the prune.
+  assert.deepEqual(rows(), before, 'rollback restores raw events and both series caches');
+  assert.equal(
+    db.prepare("SELECT COUNT(*) n FROM events WHERE path = '/atomic-old'").get().n,
+    1,
+    'the qualifying event survives the rollback',
+  );
+  assert.equal(db.prepare(`SELECT count(*) n FROM meta WHERE key = 'last_prune'`).get().n, 0,
+    'no prune run is recorded on a failed commit');
+
+  db.close();
+});
