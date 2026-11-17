@@ -101,7 +101,8 @@ function main() {
 
 // One-shot HTTP pageview collect: POSTs and records the parsed response.
 // Useful for scripted/curl-style column fill without writing a browser.
-function collectOnce(db, args) {
+// Exported for direct unit coverage (same rationale as the parse helpers below).
+export function collectOnce(db, args) {
   const secret = loadOrCreateSecret(config.dataDir);
   const options = collectArgs(args);
   const ip = options['ip'] || '127.0.0.1';
