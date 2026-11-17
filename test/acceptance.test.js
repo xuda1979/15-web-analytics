@@ -878,6 +878,14 @@ test('dashboard serves static HTML', async () => {
     !/rows.slice\(0,\s*10\)/.test(html),
     'bars() and hours() render every row (no 10-row truncation)',
   );
+  // The main daily/weekly/monthly chart must not discard the per-bucket
+  // uniques the overview API ships alongside visits: the mapping into
+  // drawChart() passes them through, the renderer overlays a uniques trend
+  // line, and the legend explains the two series.
+  assert.ok(html.includes('uniques: d.uniques'), 'chart mapping keeps per-bucket uniques');
+  assert.ok(html.includes('var umax ='), 'chart scales uniques on their own axis');
+  assert.ok(html.includes('#34d399'), 'chart draws a distinct-uniques trend line');
+  assert.ok(html.includes('class="legend"'), 'chart legend distinguishes visits and uniques');
 });
 
 test('retention prune deletes old events and keeps aggregates consistent', async () => {

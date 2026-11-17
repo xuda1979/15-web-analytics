@@ -47,7 +47,7 @@
       <option value="daily" selected>Daily</option>
       <option value="weekly">Weekly</option>
       <option value="monthly">Monthly</option>
-    </select></h3><canvas id="chart"></canvas><div class="note" id="rangeLabel"></div></div>
+    </select></h3><canvas id="chart"></canvas><div class="legend"><span class="lg v"></span>visits<span class="lg u"></span>uniques</div><div class="note" id="rangeLabel"></div></div>
 
   <div class="grid">
     <div class="card"><h3>Top pages</h3><div id="pages"></div></div>
@@ -207,6 +207,10 @@
       ctx.fillText('no data', W / 2 - 24, H / 2); return;
     }
     var max = Math.max.apply(null, data.map(function (d) { return d.visits; })) || 1;
+    // Distinct visitors ride on a second axis: each day's uniques can exceed
+    // its own visits (a guest counted for the first time in a later visit is
+    // still one new guest), so overlay the line against its own 0..max scale.
+    var umax = Math.max.apply(null, data.map(function (d) { return d.uniques; })) || 1;
     var iw = (W - padL - padR) / data.length;
     ctx.font = '10px sans-serif';
     ctx.fillStyle = '#64748b';
@@ -223,6 +227,24 @@
         ctx.fillStyle = '#cbd5e1';
         ctx.fillText(d.label, x - 9, H - 6);
       }
+    });
+    // Distinct-uniques trend line: same "visits / N uniq" pairing the hourly
+    // and top-list cards show, drawn so its own peak touches the chart top.
+    ctx.beginPath();
+    data.forEach(function (d, i) {
+      var x = padL + i * iw + iw / 2;
+      var y = H - padB - ((H - padT - padB) * (d.uniques || 0)) / umax;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = '#34d399';
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.fillStyle = '#34d399';
+    data.forEach(function (d, i) {
+      var x = padL + i * iw + iw / 2;
+      var y = H - padB - ((H - padT - padB) * (d.uniques || 0)) / umax;
+      ctx.fillRect(x - 1, y - 1, 2, 2);
     });
   }
 
@@ -278,7 +300,11 @@
           : data.daily;
         var labelKey = state.gran === 'monthly' ? 'month' : state.gran === 'weekly' ? 'week' : 'date';
         drawChart((series || []).map(function (d) {
-          return { label: String(d[labelKey]).slice(state.gran === 'daily' ? 5 : 0), visits: d.visits };
+          return {
+            label: String(d[labelKey]).slice(state.gran === 'daily' ? 5 : 0),
+            visits: d.visits,
+            uniques: d.uniques,
+          };
         }));
         // Effective range readout: the server reports the actual window used.
         var r = data.range;

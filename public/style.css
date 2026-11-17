@@ -100,6 +100,13 @@ td.num, th.num { text-align: right; }
 #chart {
   width: 100%; height: 220px;
 }
+.legend {
+  display: flex; align-items: center; gap: 6px;
+  color: var(--muted); font-size: 12px; margin-top: 8px;
+}
+.legend .lg { width: 14px; height: 3px; border-radius: 2px; }
+.legend .lg.v { background: var(--accent); }
+.legend .lg.u { background: var(--green); }
 .empty { color: var(--muted); padding: 20px; text-align: center; }
 .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
 #chart empty { color: var(--muted); }
