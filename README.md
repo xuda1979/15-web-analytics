@@ -103,7 +103,7 @@ All settings are environment variables:
 | `WA_HOST` / `WA_PORT` | `127.0.0.1` / `8787` | Bind address |
 | `WA_DATA_DIR` | `./data` | Where the DB + secret live |
 | `WA_DB_PATH` | `<dataDir>/analytics.sqlite` | SQLite file path |
-| `WA_HASH_SALT` | random per install | Keys the guest-key HMAC; pin it to keep hashes stable across restarts |
+| `WA_HASH_SALT` | unset | Optional seed for the first-time secret in `data/.wa_secret`: when set, the generated secret is `sha256(WA_HASH_SALT)` instead of random, so a recreated data dir derives the same keys. Ignored once the secret exists — hashes are stable across restarts because the secret persists |
 | `WA_VISIT_WINDOW_MS` | `1800000` (30m) | Unique-visitor heuristic window |
 | `WA_REALTIME_WINDOW_MS` | `300000` (5m) | Realtime window |
 | `WA_COLLECT_RATE_LIMIT` | `60` | Max collect POSTs per IP per rate window (`0` disables) |
