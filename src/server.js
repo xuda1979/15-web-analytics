@@ -384,7 +384,19 @@ export function createServer() {
         const rel = url.pathname.slice('/static/'.length);
         const file = path.join(config.publicDir, rel);
         const resolved = path.resolve(file);
-        if (!resolved.startsWith(config.publicDir) || !fs.existsSync(resolved)) {
+        // Containment guard: resolved must be publicDir itself or a descendant.
+        // A bare prefix compare would also admit a sibling directory that merely
+        // shares the prefix (e.g. <publicDir>-other), so require the separator.
+        const inside = resolved === config.publicDir || resolved.startsWith(config.publicDir + path.sep);
+        let isFile = false;
+        if (inside) {
+          try {
+            isFile = fs.statSync(resolved).isFile();
+          } catch {
+            isFile = false;
+          }
+        }
+        if (!inside || !isFile) {
           notFound(res);
           return;
         }

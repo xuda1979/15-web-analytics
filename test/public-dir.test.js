@@ -112,6 +112,42 @@ test('statics from the custom publicDir: known mime, unknown ext, out-of-tree, m
   assert.equal(trav.status, 404, 'encoded traversal stays blocked with the custom dir');
 });
 
+test('directory paths under /static/ answer 404 instead of crashing the stream', async () => {
+  // Before the guard grew a stat check, an existing directory slipped past
+  // fs.existsSync and fs.createReadStream(dir) emitted an unhandled EISDIR
+  // ('error' event, no listener) which crashed the whole process.
+  fs.mkdirSync(path.join(publicDir, 'assets'), { recursive: true });
+
+  for (const url of ['/static/', '/static/assets', '/static/assets/']) {
+    const res = await request('GET', url);
+    assert.equal(res.status, 404, `${url} must 404, not stream a directory`);
+    assert.equal(res.text(), 'not found');
+  }
+
+  // A trailing slash on a real file resolves to the file itself, so it still
+  // serves — the guard rejects directories, not URL residue.
+  fs.writeFileSync(path.join(publicDir, 'file.css'), 'body{}');
+  const file = await request('GET', '/static/file.css/');
+  assert.equal(file.status, 200, 'trailing slash on a file resolves to the file');
+});
+
+test('a sibling of publicDir with a shared prefix stays out of reach', async () => {
+  // Bare prefix compares (`resolved.startsWith(publicDir)`) would also accept
+  // a directory whose name merely starts with publicDir's basename, e.g. a
+  // tmpdir `<tmp>/wa-pub-...-evil/`. Prove the separator-aware guard refuses it.
+  const base = process.env.WA_PUBLIC_DIR;
+  const evil = `${base}-evil`;
+  fs.mkdirSync(evil, { recursive: true });
+  fs.writeFileSync(path.join(evil, 'pwn.txt'), 'nope');
+  try {
+    const rel = evil.replace(`${path.dirname(base)}${path.sep}`, '');
+    const res = await request('GET', `/static/${rel}/pwn.txt`);
+    assert.equal(res.status, 404, 'sibling-dir file resolved by path.resolve must not be served');
+  } finally {
+    fs.rmSync(evil, { recursive: true, force: true });
+  }
+});
+
 test('the collect snippet still serves from the repo public/ when the custom dir has none', async () => {
   const res = await request('GET', '/wa.js');
   assert.equal(res.status, 200);
