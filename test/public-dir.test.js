@@ -160,6 +160,57 @@ test('the collect snippet still serves from the repo public/ when the custom dir
   );
 });
 
+// A request that tolerates the connection being aborted mid-response: the
+// guarded handler destroys the response when the read stream fails to open,
+// which the client sees as a reset without a usable body. The suite's request()
+// helper would reject on that; this one resolves with 'aborted' instead.
+function fragileGet(url, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: url }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('error', () => resolve({ status: 'aborted' }));
+      res.on('end', () => resolve({ status: res.statusCode, text: () => Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', () => resolve({ status: 'aborted' }));
+    req.setTimeout(timeoutMs, () => resolve({ status: 'aborted' }));
+    req.end();
+  });
+}
+
+test('a static that passes stat but fails to open cannot crash the server', async () => {
+  // The statSync().isFile() guard runs before the file is opened, so a file
+  // that loses read permission (or is deleted) between the two can still fail
+  // in fs.createReadStream. An unattached 'error' event there used to crash the
+  // whole process (EACCES uncaught); the response is destroyed instead.
+  const blocked = path.join(publicDir, 'blocked.txt');
+  fs.writeFileSync(blocked, 'secret-bytes');
+  fs.chmodSync(blocked, 0o000);
+  const outcome = await fragileGet('/static/blocked.txt');
+  fs.chmodSync(blocked, 0o644); // restore even if the assertion below fails
+  fs.rmSync(blocked, { force: true });
+
+  assert.ok(outcome.status !== 200 || outcome.text() !== 'secret-bytes', 'blocked bytes are not delivered');
+  const health = await request('GET', '/api/health');
+  assert.equal(health.status, 200, 'the server survives an open-failure on a static file');
+});
+
+test('an unreadable snippet wa.js cannot crash the server either', async () => {
+  // handleSnippet probes config.publicDir/wa.js via existsSync, then opens the
+  // stream — the same stat/open race as /static/. The custom dir's blocked
+  // copy shadows the repo fallback, so the open failure must be contained.
+  const blockedJs = path.join(publicDir, 'wa.js');
+  fs.writeFileSync(blockedJs, '// secret snippet');
+  fs.chmodSync(blockedJs, 0o000);
+  const outcome = await fragileGet('/wa.js');
+  fs.chmodSync(blockedJs, 0o644); // restore so later tests see the repo fallback
+  fs.rmSync(blockedJs, { force: true });
+
+  assert.ok(outcome.status !== 200 || outcome.text() !== '// secret snippet', 'blocked snippet bytes are not delivered');
+  const health = await request('GET', '/api/health');
+  assert.equal(health.status, 200, 'the server survives an open-failure on the snippet');
+});
+
 test('the snippet 404s only when both the custom dir and the repo fallback lack wa.js', async () => {
   // handleSnippet probes config.publicDir/wa.js then the repo public/wa.js and
   // only falls through to notFound when both are absent. The repo copy always

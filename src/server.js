@@ -431,7 +431,13 @@ export function createServer() {
           return;
         }
         res.writeHead(200, { 'content-type': mime[path.extname(resolved)] || 'application/octet-stream' });
-        fs.createReadStream(resolved).pipe(res);
+        // A read stream can error after the stat guard: the file may be deleted
+        // or lose read permission between statSync and open, or hit EMFILE. An
+        // unattached 'error' event would be unhandled and crash the process, so
+        // destroy the (already-headered) response instead of crashing.
+        fs.createReadStream(resolved)
+          .on('error', () => res.destroy())
+          .pipe(res);
         return;
       }
       notFound(res);
@@ -451,7 +457,11 @@ function handleSnippet(res) {
   for (const f of files) {
     if (fs.existsSync(f)) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
-      fs.createReadStream(f).pipe(res);
+      // Same recovery as /static/: an open failure races the existsSync probe
+      // and must not surface as an unhandled 'error' event crash.
+      fs.createReadStream(f)
+        .on('error', () => res.destroy())
+        .pipe(res);
       return;
     }
   }
