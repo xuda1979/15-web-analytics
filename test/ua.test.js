@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseUa, isBot } from '../src/ua.js';
+import { parseUa, isBot, parserCache, PARSER_CACHE_MAX } from '../src/ua.js';
 
 test('parseUa reads desktop Chrome on Windows', () => {
   const r = parseUa(
@@ -94,4 +94,18 @@ test('isBot lets real browsers and CLI tools through', () => {
   ]) {
     assert.equal(isBot(ua), false, `must NOT flag ${String(ua)}`);
   }
+});
+
+test('parseUa cache is bounded and evicts the oldest entry', () => {
+  // Start from a known state: prior tests leave the module cache populated.
+  parserCache.clear();
+  const seed = `bounded-cache/${process.pid}-`;
+  for (let i = 0; i < PARSER_CACHE_MAX; i++) parseUa(seed + i);
+  assert.equal(parserCache.size, PARSER_CACHE_MAX, 'cache fills exactly to the cap');
+  // A fresh UA past the cap evicts the very oldest entry (insertion order).
+  const oldest = seed + 0;
+  assert.ok(parserCache.has(oldest), 'the oldest entry is present before the eviction');
+  parseUa(`${seed}xevict`);
+  assert.equal(parserCache.size, PARSER_CACHE_MAX, 'cache stays at the cap after overflow');
+  assert.equal(parserCache.has(oldest), false, 'oldest entry was evicted on overflow');
 });
