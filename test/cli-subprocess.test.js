@@ -175,6 +175,27 @@ test('audit via CLI: highlight() prints the plain-report deck', async () => {
   }
 });
 
+test('seed via CLI: main() dispatch fills the deterministic demo dataset', async () => {
+  const dir = tmpdir();
+  try {
+    const r = await runCli(dir, ['seed']);
+    assert.equal(r.code, 0, `seed failed:\n${r.err}`);
+    assert.match(r.out.trim(), /^seeded \d+ real events \+ 2 bots over 60 days$/, 'echoes the seeded totals');
+
+    // The visitor/visit/pageview counts come from pure loop arithmetic
+    // (v % 3, v % 4 over visitors=12), so the row totals are stable, not
+    // random — only timestamps vary.
+    const db = openDb(path.join(dir, 'analytics.sqlite'));
+    const rows = db.prepare('SELECT is_bot, COUNT(*) n FROM events GROUP BY is_bot').all();
+    const byBot = Object.fromEntries(rows.map((x) => [x.is_bot, x.n]));
+    assert.equal(byBot[0], 264, '264 real events');
+    assert.equal(byBot[1], 2, 'two bot events ride along for the metrics-exclusion path');
+    db.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('unknown subcommand prints the usage line and exits cleanly', async () => {
   const dir = tmpdir();
   try {
