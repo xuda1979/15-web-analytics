@@ -69,6 +69,19 @@ test('tick evicts prior-window entries once the map is at maxEntries', () => {
   assert.equal(rl.check('b', 2_100), 0, 'an evicted key gets a fresh allowance, not a stale block');
 });
 
+test('a same-window flood of distinct keys cannot grow the map past maxEntries', () => {
+  const rl = new RateLimiter({ windowMs: 60_000, limit: 60, maxEntries: 3 });
+  rl.check('a', 1_000);
+  rl.check('b', 1_001);
+  rl.check('c', 1_002);
+  assert.equal(rl.counts.size, 3, 'map fills to the cap');
+  // Touching 'a' makes it the most-recently-used; the next new key evicts 'b'.
+  rl.check('a', 1_003);
+  rl.check('d', 1_004);
+  assert.equal(rl.counts.size, 3, 'cap holds even with a same-window flood');
+  assert.deepEqual([...rl.counts.keys()], ['c', 'a', 'd'], 'least-recently-touched key is evicted');
+});
+
 test('tick leaves a sub-capacity map alone even across old windows', () => {
   const rl = new RateLimiter({ windowMs: 1000, limit: 1, maxEntries: 10 });
   rl.check('k', 0);
