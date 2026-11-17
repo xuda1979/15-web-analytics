@@ -326,7 +326,10 @@
 
   // Draw the realtime per-minute buckets as a compact sparkline next to the
   // live badge. The 96x20 canvas walks the same bucket list the KPI reads, so
-  // the two never disagree.
+  // the two never disagree. Each bucket carries its distinct uniques too
+  // (realtime() counts them in the same query), so a green uniques polyline
+  // rides the visits bars on its own scale the way the main chart overlays the
+  // uniques trend — the badge label already pairs "N pv / M uniq".
   function drawSpark(buckets) {
     var c = el('rtSpark');
     if (!c) return;
@@ -335,11 +338,28 @@
     ctx.clearRect(0, 0, W, H);
     if (!buckets || !buckets.length) return;
     var max = Math.max.apply(null, buckets.map(function (b) { return b.visits; })) || 1;
+    var umax = Math.max.apply(null, buckets.map(function (b) { return b.uniques; })) || 1;
     var iw = W / buckets.length;
     ctx.fillStyle = 'rgba(56,189,248,0.85)';
     buckets.forEach(function (b, i) {
       var h = Math.round(((H - 2) * b.visits) / max);
       ctx.fillRect(i * iw + 1, H - h, Math.max(iw - 2, 1), h);
+    });
+    ctx.beginPath();
+    buckets.forEach(function (b, i) {
+      var x = i * iw + iw / 2;
+      var y = H - 1 - Math.round(((H - 2) * (b.uniques || 0)) / umax);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = '#34d399';
+    ctx.lineWidth = 1;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.fillStyle = '#34d399';
+    buckets.forEach(function (b, i) {
+      var x = i * iw + iw / 2;
+      var y = H - 1 - Math.round(((H - 2) * (b.uniques || 0)) / umax);
+      ctx.fillRect(x - 1, y - 1, 2, 2);
     });
   }
 

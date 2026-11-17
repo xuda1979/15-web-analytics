@@ -855,6 +855,11 @@ test('dashboard serves static HTML', async () => {
   // Realtime per-minute buckets are drawn as a compact sparkline in the badge.
   assert.ok(html.includes('id="rtSpark"'), 'dashboard has a realtime sparkline canvas');
   assert.ok(html.includes('drawSpark(buckets)'), 'dashboard draws the realtime bucket sparkline');
+  // The sparkline must not discard the per-bucket uniques the realtime API
+  // ships: the badge label already pairs "N pv / M uniq", so the same uniques
+  // ride the visits bars as a green polyline scaled on its own axis.
+  assert.ok(html.includes("buckets.map(function (b) { return b.uniques; })"), 'sparkline reads per-bucket uniques');
+  assert.ok(html.includes("ctx.strokeStyle = '#34d399'"), 'sparkline draws a distinct-uniques polyline');
   // Session count is computed by visit_stats but was never rendered; the KPI
   // row must expose it (bounce rate is derived from sessions/visits).
   assert.ok(html.includes('id="kSessions"'), 'dashboard has a sessions KPI');

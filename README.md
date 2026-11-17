@@ -29,7 +29,8 @@ local SQLite file, no third-party services.
   entry/exit pages.
 - Real-time view (last 5 minutes, per-minute buckets) and day / week / month
   aggregate views (the dashboard chart switches granularity, overlaying a
-  distinct-uniques trend line on the pageview bars).
+  distinct-uniques trend line on the pageview bars; the realtime sparkline
+  rides its visits bars with the same distinct-uniques polyline).
 - Filters by page, source, device, and date range.
 - CSV/JSON export with IP redaction.
 - Generated privacy-audit report documenting the data flow and compliance
