@@ -276,7 +276,14 @@ function handleExport(req, res) {
   const ct = format === 'csv' ? 'text/csv; charset=utf-8' : 'application/json';
   const cd = format === 'csv' ? `attachment; filename="events-${dayKey(start)}-${dayKey(end)}.csv"` : undefined;
   res.writeHead(200, { 'content-type': ct, ...(cd ? { 'content-disposition': cd } : {}) });
-  res.end(typeof data === 'string' ? data : JSON.stringify(data));
+  let body = typeof data === 'string' ? data : JSON.stringify(data);
+  if (format === 'csv') {
+    // Prefix a UTF-8 BOM so Windows Excel decodes the export as UTF-8 and
+    // renders multibyte text (Chinese titles/referrers) correctly instead of
+    // re-decoding the byte stream as ANSI/GBK and showing mojibake.
+    body = '\ufeff' + body;
+  }
+  res.end(body);
 }
 
 function handleAudit(req, res) {

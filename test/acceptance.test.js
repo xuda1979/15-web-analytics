@@ -773,6 +773,7 @@ test('CSV and JSON export work and IP is redacted/null', async () => {
 
   const csvR = await request('GET', '/api/export?days=30&format=csv');
   const csv = csvR.text();
+  assert.ok(csv.startsWith('\ufeff'), 'csv should carry a UTF-8 BOM so Windows Excel decodes UTF-8');
   assert.ok(csv.includes('visited_at'));
   assert.ok(!csv.includes('203.0.113.77'), 'csv must not leak the raw IP');
   assert.ok(/[,]/.test(csv), 'csv should be delimited');
