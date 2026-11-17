@@ -36,13 +36,18 @@ export function pruneEvents(db, cutoffMs) {
 
       // Rebuild in the same order insertEvent() writes caches, applying the
       // same unique-visitor heuristic against the surviving rows only.
+      // Rows are streamed (ORDER BY guest_key, ts is index-covered by
+      // idx_events_guest) so a large surviving set cannot be materialized in
+      // memory. The aggregate upserts write to different tables, and
+      // node:sqlite iterates over a stable snapshot of `events`, so the read
+      // stream is unaffected by them.
       const rows = db
         .prepare(
           `SELECT guest_key, ts
            FROM events WHERE is_bot = 0
            ORDER BY guest_key, ts`,
         )
-        .all();
+        .iterate();
 
       let lastKey = null;
       let lastTs = 0;

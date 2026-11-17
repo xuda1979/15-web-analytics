@@ -168,6 +168,78 @@ test('prune: bot events are deleted but stay absent from metrics', () => {
   db.close();
 });
 
+test('prune: streamed rebuild keeps per-guest edges/visit keys across interleaved survivors', () => {
+  const { db, secret } = fresh();
+  // Fixed reference instants (2026-11-09 is a Monday UTC). Guests share the
+  // timeline but their events interleave, so the streamed ORDER BY guest_key,
+  // ts iteration crosses guest boundaries repeatedly (the per-guest flush
+  // path) and splits one guest into two visits (the visit-window path).
+  const T = Date.UTC(2026, 10, 9, 12, 0);
+  const MIN = 60_000;
+  const HOUR = 3600_000;
+  const DAY = 86_400_000;
+
+  // Guest G1: an old event (pruned), then two visits — /home->/about within
+  // the window, and /again a second visit after the window gap.
+  post(db, secret, { pathname: '/g1-old', ip: '10.20.0.1', ua: 'UA-G1', ts: T - 30 * DAY });
+  post(db, secret, { pathname: '/g1-home', ip: '10.20.0.1', ua: 'UA-G1', ts: T });
+  post(db, secret, { pathname: '/g1-about', ip: '10.20.0.1', ua: 'UA-G1', ts: T + MIN });
+  post(db, secret, { pathname: '/g1-again', ip: '10.20.0.1', ua: 'UA-G1', ts: T + 2 * HOUR });
+  // Guest G2: a single two-page visit interleaved between G1's events.
+  post(db, secret, { pathname: '/g2-a', ip: '10.20.0.2', ua: 'UA-G2', ts: T + 30_000 });
+  post(db, secret, { pathname: '/g2-b', ip: '10.20.0.2', ua: 'UA-G2', ts: T + 5 * MIN });
+  // Guest G3: a single-page visit.
+  post(db, secret, { pathname: '/g3-solo', ip: '10.20.0.3', ua: 'UA-G3', ts: T + 10 * MIN });
+
+  // After the prune the /g1-old event is gone; every survivor's edges and
+  // visit key must match the frames computed from the surviving rows only.
+  const res = pruneEvents(db, T - 5 * DAY);
+  assert.equal(res.deleted, 1, 'the old G1 event is pruned');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM events WHERE is_bot = 0').get().n, 6, 'six survivors');
+
+  const rows = () =>
+    db
+      .prepare(
+        `SELECT guest_key, path, ts, entry_path, exit_path, visit_key
+         FROM events WHERE is_bot = 0 ORDER BY ts`,
+      )
+      .all();
+  const edges = new Map(rows().map((r) => [r.path, r]));
+
+  // G1 visit 1: /home -> /about, visit key = the /home ts.
+  assert.equal(edges.get('/g1-home').entry_path, '/g1-home', 'frame 1 entry');
+  assert.equal(edges.get('/g1-home').exit_path, '/g1-about', 'frame 1 exit');
+  assert.equal(edges.get('/g1-about').entry_path, '/g1-home', 'frame 1 entry shared');
+  assert.equal(edges.get('/g1-about').exit_path, '/g1-about', 'frame 1 exit shared');
+  assert.equal(edges.get('/g1-home').visit_key, T, 'visit key is the first event ts');
+  assert.equal(edges.get('/g1-about').visit_key, T, 'visit key shared across the frame');
+  // G1 visit 2: /g1-again is its own single-page visit after the window gap.
+  assert.equal(edges.get('/g1-again').entry_path, '/g1-again', 'frame 2 self-entry');
+  assert.equal(edges.get('/g1-again').exit_path, '/g1-again', 'frame 2 self-exit');
+  assert.equal(edges.get('/g1-again').visit_key, T + 2 * HOUR, 'frame 2 visit key');
+  // G2: one visit over /g2-a -> /g2-b.
+  assert.equal(edges.get('/g2-a').entry_path, '/g2-a');
+  assert.equal(edges.get('/g2-a').exit_path, '/g2-b');
+  assert.equal(edges.get('/g2-b').entry_path, '/g2-a');
+  assert.equal(edges.get('/g2-b').exit_path, '/g2-b');
+  assert.equal(edges.get('/g2-a').visit_key, T + 30_000, 'G2 visit key');
+  // G3: single-page visit.
+  assert.equal(edges.get('/g3-solo').entry_path, '/g3-solo');
+  assert.equal(edges.get('/g3-solo').exit_path, '/g3-solo');
+  assert.equal(edges.get('/g3-solo').visit_key, T + 10 * MIN, 'G3 visit key');
+
+  // Dashboard invariants survive the streamed rebuild.
+  const range = [T - 5 * DAY, T + 3 * HOUR];
+  const t = totals(db, range[0], range[1]);
+  assert.equal(t.visits, 6, 'each survivor event contributes a visit');
+  assert.equal(t.uniques, 3, 'three distinct guests');
+  assert.equal(sumVisits(dailySeries(db, range[0], range[1])), t.visits, 'daily sums to totals');
+  assert.equal(sumVisits(weeklySeries(db, range[0], range[1])), t.visits, 'weekly sums to totals');
+  assert.equal(sumVisits(monthlySeries(db, range[0], range[1])), t.visits, 'monthly sums to totals');
+
+  db.close();
+});
+
 test('prune: a mid-rebuild failure rolls back the partial delete (atomicity)', () => {
   const { db, secret } = fresh();
   const now = Date.now();

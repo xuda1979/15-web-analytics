@@ -191,21 +191,18 @@ export function refreshEntryExit(db, sinceMs = Date.now() - 24 * 3600 * 1000) {
 
 // The core edge-refresh routine without transaction management, so callers
 // that already hold a transaction (e.g. pruneEvents) can reuse the exact same
-// logic without nesting BEGIN/COMMIT.
+// logic without nesting BEGIN/COMMIT. Rows arrive ORDER BY guest_key, ts
+// (index-covered by idx_events_guest), so each guest's events are processed
+// and freed as the stream advances — memory is bounded by the largest single
+// guest's frame, not by the total surviving set. The interleaved UPDATEs
+// target `events` while the iterator is reading a stable snapshot of it, so
+// the stream is unaffected (node:sqlite streams from an implicit snapshot).
 export function refreshEntryExitCore(db, sinceMs) {
-  const rows = db
-    .prepare(
-      `SELECT id, guest_key, ts, path, visit_key FROM events
-        WHERE ts >= ? AND is_bot = 0
-        ORDER BY guest_key, ts`,
-    )
-    .all(sinceMs);
-
-  const byGuest = new Map();
-  for (const r of rows) {
-    if (!byGuest.has(r.guest_key)) byGuest.set(r.guest_key, []);
-    byGuest.get(r.guest_key).push(r);
-  }
+  const stmt = db.prepare(
+    `SELECT id, guest_key, ts, path, visit_key FROM events
+      WHERE ts >= ? AND is_bot = 0
+      ORDER BY guest_key, ts`,
+  );
 
   const update = db.prepare(
     `UPDATE events SET entry_path = ?, exit_path = ?,
@@ -226,12 +223,13 @@ export function refreshEntryExitCore(db, sinceMs) {
     }
   };
 
+  // Re-frame entry/exit edges per guest, honoring the visit window.
   // Aggregated entry/exit counts are computed by `entryExitPages` with
   // COUNT(DISTINCT visit_key), so they cannot drift: every non-bot event that
   // started a visit carries a distinct visit_key, and an event that merely
   // continues a visit points at the same key. refreshEntryExit only needs to
   // keep the per-event columns accurate for raw exports and candidate reads.
-  for (const all of byGuest.values()) {
+  const rewrite = (all) => {
     let start = 0;
     for (let i = 1; i <= all.length; i++) {
       const gap = i < all.length ? all[i].ts - all[i - 1].ts : Infinity;
@@ -248,5 +246,18 @@ export function refreshEntryExitCore(db, sinceMs) {
       }
       setVisitKey(frame, frame[0].ts);
     }
+  };
+
+  const iter = stmt.iterate(sinceMs);
+  let currentKey = null;
+  let current = [];
+  for (const r of iter) {
+    if (currentKey !== null && r.guest_key !== currentKey) {
+      rewrite(current);
+      current = [];
+    }
+    currentKey = r.guest_key;
+    current.push(r);
   }
+  rewrite(current);
 }
