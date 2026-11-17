@@ -26,6 +26,12 @@
     "fathom"
   ],
   "license": "MIT",
+  "files": [
+    "src",
+    "public",
+    "README.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "ua-parser-js": "^1.0.39"
   }
