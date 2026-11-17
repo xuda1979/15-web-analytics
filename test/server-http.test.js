@@ -99,6 +99,21 @@ test('collect: an oversized payload trips a hard connection reset, not a 4xx', a
   assert.equal(health.json().ok, true);
 });
 
+test('collect: a small raw request resolves normally and leaves no body via the capture path', async () => {
+  // Every other rawRequestCapture caller trips the oversized-payload abort, so
+  // its success path (the response callback resolving status + text) never
+  // fires. A small raw POST stays under the 4096-byte readJsonBody cap and
+  // answers 204, exercising that path end-to-end.
+  const { port } = await startServer();
+  const res = await rawRequestCapture(port, 'POST', '/api/collect', JSON.stringify({ path: '/raw-ok' }), {
+    'content-type': 'application/json',
+    'x-forwarded-for': '203.0.113.3',
+    'user-agent': 'UA-RawOk',
+  });
+  assert.equal(res.status, 204, 'a well-formed collect lands outside the abort path');
+  assert.equal(res.text(), '', 'the 204 has no body');
+});
+
 test('collect: malformed JSON yields a 400 bad-payload JSON response', async () => {
   const { port, request } = await startServer();
   const res = await rawRequest(port, 'POST', '/api/collect', '{"path": "unterminated', {
