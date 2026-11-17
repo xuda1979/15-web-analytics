@@ -14,7 +14,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { openDb } from '../src/store.js';
-import { exportEvents, exportSummary } from '../src/exporter.js';
+import { exportEvents, exportSummary, exportEventsIter, CSV_COLUMNS } from '../src/exporter.js';
+import { csvRow } from '../src/analytics.js';
 
 const T = Date.UTC(2026, 10, 10, 9, 0); // 2026-11-10 09:00 UTC
 const SPAN = 3600_000;
@@ -189,6 +190,79 @@ test('exportSummary honors the filter argument across sections', () => {
       ['/paid'],
       'filtered top pages only show the matching path',
     );
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('exportEventsIter streams the same rows the materialized export returns', () => {
+  const { db, dir } = fresh();
+  try {
+    const ins = db.prepare(
+      'INSERT INTO events (ts, visited_at, guest_key, ip, ua, path, title, referrer, is_bot) VALUES (?,?,?,?,?,?,?,?,?)',
+    );
+    ins.run(T, new Date(T).toISOString(), 'g1', '203.0.113.9', 'Test/1.0', '/a', 'First', 'https://r/1', 0);
+    ins.run(T + 1000, new Date(T + 1000).toISOString(), 'g2', '2001:db8:85a3:0:0:8a2e:370:7334', 'Test/1.0', '/b', 'IPv6?', '', 0);
+    ins.run(T + 1000, new Date(T + 1000).toISOString(), 'g4', '203.0.113.77', 'Bot/1.0', '/b', 'Bot', '', 1);
+    ins.run(T + 2000, new Date(T + 2000).toISOString(), 'g3', null, 'Test/1.0', '/a', '=SUM(1,1)', 'https://r/2', 0);
+
+    const streamed = [...exportEventsIter(db, T, T + SPAN)];
+    const materialized = exportEvents(db, T, T + SPAN, 'json');
+    assert.deepEqual(streamed, materialized, 'iter and one-shot return identical rows');
+    assert.deepEqual(
+      streamed.map((r) => r.path),
+      ['/a', '/b', '/a'],
+      'bots excluded, ts order preserved',
+    );
+    assert.equal(streamed[0].ip, '203.0.113.x', 'IPv4 still masked while streaming');
+    assert.equal(streamed[1].ip, '2001:db8:85a3:xxxx:xxxx:xxxx:xxxx', 'IPv6 still masked while streaming');
+    assert.equal(streamed[0].visitsSerial, 1, 'visitsSerial still a Number');
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('exportEventsIter honors the fq filter and still streams every matching row', () => {
+  const { db, dir } = fresh();
+  try {
+    const ins = db.prepare(
+      'INSERT INTO events (ts, visited_at, guest_key, ip, ua, path, is_bot) VALUES (?,?,?,?,?,?,?)',
+    );
+    ins.run(T, new Date(T).toISOString(), 'g1', '203.0.113.9', 'Test/1.0', '/paid', 0);
+    ins.run(T + 1000, new Date(T + 1000).toISOString(), 'g2', '203.0.113.10', 'Test/1.0', '/free', 0);
+
+    const fq = { sql: 'path = ?', args: ['/paid'] };
+    const streamed = [...exportEventsIter(db, T, T + SPAN, fq)];
+    assert.deepEqual(
+      streamed.map((r) => r.path),
+      ['/paid'],
+      'the predicate narrows streamed rows just like the one-shot export',
+    );
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('streamed CSV rows are byte-identical to the materialized toCsv body', () => {
+  const { db, dir } = fresh();
+  try {
+    const ins = db.prepare(
+      'INSERT INTO events (ts, visited_at, guest_key, ip, ua, path, title, referrer, is_bot) VALUES (?,?,?,?,?,?,?,?,?)',
+    );
+    ins.run(T, new Date(T).toISOString(), 'g1', '203.0.113.9', 'Test/1.0', '/a', 'Title, with comma', 'https://r/1', 0);
+    ins.run(T + 2000, new Date(T + 2000).toISOString(), 'g3', null, 'Test/1.0', '=HYPERLINK("https://evil")', 'Line\nbreak', '', 0);
+
+    const materialized = exportEvents(db, T, T + SPAN, 'csv');
+    const streamedLines = [CSV_COLUMNS.join(','), ...[...exportEventsIter(db, T, T + SPAN)].map(
+      (r) => csvRow({ ...r, visitsSerial: undefined }, CSV_COLUMNS),
+    )];
+    const streamed = streamedLines.join('\n') + '\n';
+    assert.equal(streamed, materialized, 'per-row csvRow lines equal the one-shot CSV body');
+    assert.ok(streamed.includes("'=HYPERLINK"), 'formula neutralization survives streaming');
+    assert.ok(streamed.includes('"Title, with comma"'), 'RFC 4180 quoting survives streaming');
   } finally {
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });

@@ -761,17 +761,24 @@ export function entryExitFiltered(db, startMs, endMs, limit, fq) {
   return { entries: firstLast('MIN'), exits: firstLast('MAX') };
 }
 
-export function toCsv(rows, columns) {
-  // Neutralize spreadsheet formula injection (CWE-1236): a cell whose first
-  // character is a formula metacharacter (= + - @ tab CR) executes as a
-  // formula when the export is opened in Excel/Sheets. Prefix those cells
-  // with a single quote so they render as literal text instead.
-  const FORMULA_FIRST = /^[=+\-@\t\r]/;
+// Neutralize spreadsheet formula injection (CWE-1236): a cell whose first
+// character is a formula metacharacter (= + - @ tab CR) executes as a
+// formula when the export is opened in Excel/Sheets. Prefix those cells
+// with a single quote so they render as literal text instead.
+const FORMULA_FIRST = /^[=+\-@\t\r]/;
+
+// One CSV body row (no trailing newline). Shared by the materialized toCsv()
+// and the streaming export path so both escape identically.
+export function csvRow(r, columns) {
   const esc = (v) => {
     let s = v === null || v === undefined ? '' : String(v);
     if (s !== '' && FORMULA_FIRST.test(s)) s = `'${s}`;
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const body = rows.map((r) => columns.map((c) => esc(r[c])).join(','));
+  return columns.map((c) => esc(r[c])).join(',');
+}
+
+export function toCsv(rows, columns) {
+  const body = rows.map((r) => csvRow(r, columns));
   return [columns.join(','), ...body].join('\n') + '\n';
 }

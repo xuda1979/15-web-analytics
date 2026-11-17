@@ -68,25 +68,35 @@ const EXPORT_COLUMNS = [
   'ua',
 ];
 
-const CSV_COLUMNS = EXPORT_COLUMNS.slice(1);
+// The 20 data columns of the CSV (EXPORT_COLUMNS minus the phantom
+// visitsSerial). Exported for the streaming CSV writer in server.js.
+export const CSV_COLUMNS = EXPORT_COLUMNS.slice(1);
+
+// Streaming face of the raw event export. Yields the same mapped rows in the
+// same ORDER BY ts order that exportEvents() materializes, so the HTTP layer
+// can write a huge export without holding every row (or the whole CSV/JSON
+// body) in memory. Each row is mapped on the fly from the statement iterator.
+export function* exportEventsIter(db, startMs, endMs, fq) {
+  const stmt = db.prepare(
+    `SELECT id, ${CSV_COLUMNS.join(', ')} FROM events
+      WHERE ts >= ? AND ts <= ? AND is_bot = 0${fq ? ` AND ${fq.sql}` : ''}
+      ORDER BY ts`,
+  );
+  for (const r of stmt.iterate(startMs, endMs, ...(fq ? fq.args : []))) {
+    if (!r) continue;
+    yield {
+      ...r,
+      visitsSerial: Number(r.visitsSerial || r.id),
+      ip: r.ip ? anonymizeIp(r.ip) : null,
+    };
+  }
+}
 
 // Export raw events in [startMs, endMs). The IP column is always redacted or
 // NULL regardless of the WA_STORE_IP setting. An optional `fq` predicate
 // (`{sqlWithoutRange, args}`) narrows the export to a page/source/device.
 export function exportEvents(db, startMs, endMs, format = 'json', fq) {
-  const rows = db
-    .prepare(
-      `SELECT id, ${CSV_COLUMNS.join(', ')} FROM events
-        WHERE ts >= ? AND ts <= ? AND is_bot = 0${fq ? ` AND ${fq.sql}` : ''}
-        ORDER BY ts`,
-    )
-    .all(startMs, endMs, ...(fq ? fq.args : []))
-    .filter((r) => r)
-    .map((r) => ({
-      ...r,
-      visitsSerial: Number(r.visitsSerial || r.id),
-      ip: r.ip ? anonymizeIp(r.ip) : null,
-    }));
+  const rows = [...exportEventsIter(db, startMs, endMs, fq)];
 
   if (format === 'csv') {
     const mapped = rows.map((r) => ({ ...r, visitsSerial: undefined }));

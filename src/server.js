@@ -20,8 +20,8 @@ import { RateLimiter } from './ratelimit.js';
 import { insertEvent, normalizeEvent, refreshEntryExit } from './collector.js';
 import { pruneEvents } from './retention.js';
 import {
+  csvRow,
   dailySeries,
-  weeklySeries,
   monthlySeries,
   topPages,
   topSources,
@@ -38,6 +38,7 @@ import {
   realtime,
   totals,
   visitStats,
+  weeklySeries,
   totalsFiltered,
   visitStatsFiltered,
   dailySeriesFiltered,
@@ -60,7 +61,7 @@ import {
   returningStats,
   returningStatsFiltered,
 } from './analytics.js';
-import { exportEvents, exportSummary } from './exporter.js';
+import { exportEvents, exportSummary, exportEventsIter, CSV_COLUMNS } from './exporter.js';
 import { generateAudit } from './audit.js';
 
 ensureDataDir();
@@ -262,25 +263,52 @@ function handleExport(req, res) {
   const format = q.get('format') === 'csv' ? 'csv' : 'json';
   const summary = q.get('summary') === '1';
   const filters = { page: q.get('page'), source: q.get('source'), device: q.get('device') };
-  let data;
-  if (summary && (filters.page || filters.source || filters.device)) {
-    // Summary export honors active filters like the dashboard does.
-    const f = filteredQuery(filters);
-    data = exportSummary(db, start, end, format, f);
-  } else if (!summary && (filters.page || filters.source || filters.device)) {
-    const f = filteredQuery(filters);
-    data = exportEvents(db, start, end, format, f);
-  } else {
-    data = summary ? exportSummary(db, start, end, format) : exportEvents(db, start, end, format);
-  }
   const ct = format === 'csv' ? 'text/csv; charset=utf-8' : 'application/json';
   const cd = format === 'csv' ? `attachment; filename="events-${dayKey(start)}-${dayKey(end)}.csv"` : undefined;
   res.writeHead(200, { 'content-type': ct, ...(cd ? { 'content-disposition': cd } : {}) });
+
+  if (!summary) {
+    // Raw event export: stream rows out of SQLite so a multi-year export never
+    // materializes the full result (or a single giant body string) in memory.
+    // JSON and CSV writes below are byte-identical to the previous one-shot
+    // bodies; res.write() buffers in Node, so row-by-row writes stay cheap.
+    const fq = filters.page || filters.source || filters.device ? filteredQuery(filters) : null;
+    if (format === 'csv') {
+      // Prefix a UTF-8 BOM so Windows Excel decodes the export as UTF-8 and
+      // renders multibyte text (Chinese titles/referrers) correctly instead of
+      // re-decoding the byte stream as ANSI/GBK and showing mojibake.
+      res.write('\ufeff');
+      res.write(CSV_COLUMNS.join(',') + '\n');
+      for (const row of exportEventsIter(db, start, end, fq)) {
+        res.write(csvRow({ ...row, visitsSerial: undefined }, CSV_COLUMNS) + '\n');
+      }
+    } else {
+      res.write('[');
+      let first = true;
+      for (const row of exportEventsIter(db, start, end, fq)) {
+        if (!first) res.write(',');
+        res.write(JSON.stringify(row));
+        first = false;
+      }
+      res.write(']');
+    }
+    res.end();
+    return;
+  }
+
+  // Summary export aggregates the whole range first (aggregate-sized, so it
+  // stays materialized like the dashboard itself).
+  let data;
+  if (filters.page || filters.source || filters.device) {
+    // Summary export honors active filters like the dashboard does.
+    const f = filteredQuery(filters);
+    data = exportSummary(db, start, end, format, f);
+  } else {
+    data = exportSummary(db, start, end, format);
+  }
   let body = typeof data === 'string' ? data : JSON.stringify(data);
   if (format === 'csv') {
-    // Prefix a UTF-8 BOM so Windows Excel decodes the export as UTF-8 and
-    // renders multibyte text (Chinese titles/referrers) correctly instead of
-    // re-decoding the byte stream as ANSI/GBK and showing mojibake.
+    // Prefix a UTF-8 BOM so Windows Excel decodes the export as UTF-8.
     body = '\ufeff' + body;
   }
   res.end(body);
