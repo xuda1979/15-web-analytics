@@ -347,6 +347,12 @@ function notFound(res) {
   res.end('not found');
 }
 
+// HEAD must behave exactly like GET (RFC 9110 §9.3.2) except that the server
+// sends no response body; Node suppresses the body for HEAD automatically, so
+// the GET handlers can serve both. Without this, curl -I and HEAD-based uptime
+// probes hit the catch-all and get a 404 for every read route.
+const isRead = (req) => req.method === 'GET' || req.method === 'HEAD';
+
 export function createServer() {
   const snippetPath = config.snippetPath;
   return http.createServer(async (req, res) => {
@@ -374,7 +380,7 @@ export function createServer() {
 
     try {
       // Snippet route.
-      if (url.pathname === snippetPath) {
+      if (isRead(req) && url.pathname === snippetPath) {
         handleSnippet(res);
         return;
       }
@@ -383,34 +389,34 @@ export function createServer() {
         await handleCollect(req, res);
         return;
       }
-      if (req.method === 'GET' && (url.pathname === config.overviewPath || url.pathname === '/api/overview')) {
+      if (isRead(req) && (url.pathname === config.overviewPath || url.pathname === '/api/overview')) {
         handleOverview(req, res);
         return;
       }
-      if (req.method === 'GET' && url.pathname === config.realtimePath) {
+      if (isRead(req) && url.pathname === config.realtimePath) {
         handleRealtime(req, res);
         return;
       }
-      if (req.method === 'GET' && (url.pathname === config.exportPath || url.pathname === '/api/export')) {
+      if (isRead(req) && (url.pathname === config.exportPath || url.pathname === '/api/export')) {
         handleExport(req, res);
         return;
       }
-      if (req.method === 'GET' && (url.pathname === config.auditPath || url.pathname === '/api/audit')) {
+      if (isRead(req) && (url.pathname === config.auditPath || url.pathname === '/api/audit')) {
         handleAudit(req, res);
         return;
       }
-      if (req.method === 'GET' && url.pathname === '/api/health') {
+      if (isRead(req) && url.pathname === '/api/health') {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, ts: Date.now() }));
         return;
       }
-      if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+      if (isRead(req) && (url.pathname === '/' || url.pathname === '/index.html')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(dashboardHtml || '<h1>dashboard not built</h1>');
         return;
       }
       // Static.
-      if (req.method === 'GET' && url.pathname.startsWith('/static/')) {
+      if (isRead(req) && url.pathname.startsWith('/static/')) {
         const rel = url.pathname.slice('/static/'.length);
         const file = path.join(config.publicDir, rel);
         const resolved = path.resolve(file);

@@ -275,6 +275,29 @@ test('health: returns ok and a numeric timestamp', async () => {
   assert.ok(Number.isInteger(body.ts) && body.ts >= before && body.ts <= after, 'ts is a fresh epoch ms');
 });
 
+test('routing: HEAD mirrors GET on every read route and sends no body', async () => {
+  const { port, request } = await startServer();
+
+  // The GET response of the same URL gives the expected status; a HEAD must
+  // match it but deliver zero body bytes (curl -I / uptime probes included).
+  const cases = ['/', '/wa.js', '/api/overview', '/api/realtime', '/api/audit', '/api/health', '/static/style.css'];
+  for (const url of cases) {
+    const viaGet = await request('GET', url);
+    const viaHead = await rawRequest(port, 'HEAD', url);
+    assert.equal(viaHead.status, viaGet.status, `HEAD ${url} matches GET status`);
+    assert.equal(viaHead.text(), '', `HEAD ${url} sends no body`);
+    assert.equal(viaHead.headers['content-type'], viaGet.headers['content-type'], `HEAD ${url} keeps the content-type`);
+  }
+
+  // A HEAD on the POST-only collect path is not a read route.
+  const collectHead = await rawRequest(port, 'HEAD', '/api/collect');
+  assert.equal(collectHead.status, 404, 'HEAD on the collect path is not a route');
+
+  // The snippet is a read resource: POSTing it no longer serves the JS.
+  const snippetPost = await rawRequest(port, 'POST', '/wa.js');
+  assert.equal(snippetPost.status, 404, 'POSTing the snippet path is not a route');
+});
+
 test('hardening: every response carries the no-store and nosniff headers', async () => {
   const { request } = await startServer();
   for (const url of ['/wa.js', '/api/overview', '/api/health', '/static/style.css']) {
