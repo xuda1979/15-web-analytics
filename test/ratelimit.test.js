@@ -32,6 +32,51 @@ test('RateLimiter windows reset', () => {
   assert.ok(rl.check('z', t + 2000) === 0 || rl.check('z', t + 2000) > 0, 'boundary stays consistent');
 });
 
+test('keyFor floors now to the fixed window start', () => {
+  const rl = new RateLimiter({ windowMs: 60_000 });
+  assert.equal(rl.keyFor(123_456_000), 123_420_000, 'floors to the minute');
+  assert.equal(rl.keyFor(123_480_000), 123_480_000, 'an aligned instant maps to itself');
+  assert.equal(rl.keyFor(123_479_999), 123_420_000, 'the instant before the boundary maps back');
+});
+
+test('in-window calls increment the count up to the limit, then reject', () => {
+  const rl = new RateLimiter({ windowMs: 60_000, limit: 5 });
+  rl.check('k', 1_000);
+  rl.check('k', 1_001);
+  assert.equal(rl.counts.get('k').count, 2, 'each call bumps the current window count');
+  rl.check('k', 1_002);
+  rl.check('k', 1_003);
+  rl.check('k', 1_004);
+  assert.equal(rl.counts.get('k').count, 5, 'the limit is reachable exactly');
+  assert.ok(rl.check('k', 1_005) > 0, 'the sixth call rejects');
+});
+
+test('check rejects with the exact ms until the window rolls over', () => {
+  const rl = new RateLimiter({ windowMs: 1000, limit: 2 });
+  rl.check('k', 500);
+  rl.check('k', 900);
+  assert.equal(rl.check('k', 999), 1, 'Retry-After = windowMs - (now % windowMs)');
+  assert.equal(rl.check('k', 1_000), 0, 'window rollover grants a fresh allowance');
+});
+
+test('tick evicts prior-window entries once the map is at maxEntries', () => {
+  const rl = new RateLimiter({ windowMs: 1000, limit: 1, maxEntries: 2 });
+  rl.check('a', 0);     // window 0
+  rl.check('b', 100);   // window 0 — map now at the cap
+  rl.check('a', 2_000); // window 2: tick cuts both stale win-0 entries, then re-adds a
+  assert.equal(rl.counts.size, 1, 'eviction makes room instead of growing past the cap');
+  assert.deepEqual([...rl.counts.keys()], ['a']);
+  assert.equal(rl.check('b', 2_100), 0, 'an evicted key gets a fresh allowance, not a stale block');
+});
+
+test('tick leaves a sub-capacity map alone even across old windows', () => {
+  const rl = new RateLimiter({ windowMs: 1000, limit: 1, maxEntries: 10 });
+  rl.check('k', 0);
+  rl.check('k', 5_000); // same key, next window — size 1 stays under the cap
+  assert.equal(rl.counts.size, 1);
+  assert.equal([...rl.counts.values()][0].winStart, 5_000, 'stale window never evicted early');
+});
+
 test('collect endpoint returns 429 once the per-IP limit is hit', async () => {
   const { port } = await startServer();
   // Start fresh: rate-limit the test with a tiny window over the live config?
