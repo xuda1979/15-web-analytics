@@ -270,6 +270,48 @@ test('hardening: every response carries the no-store and nosniff headers', async
   }
 });
 
+test('collect: a burst past the rate limit answers 429 and keeps the loop alive', async () => {
+  const { request } = await startServer();
+
+  // The shared in-process server runs with the default collect limiter
+  // (config.collectRateLimit = 60, 60s window), and clientIp() keys off the
+  // first x-forwarded-for value. A dedicated IP keeps this counter isolated
+  // from sibling tests' distinct XFF assignments.
+  const spamIp = '198.51.100.77';
+  const ua = 'UA-RL';
+
+  // 60 requests fit inside the window (the limiter's `count >= limit` check at
+  // the edge re-arms the next request to the 61st).
+  for (let i = 0; i < 60; i++) {
+    const res = await request('POST', '/api/collect', { path: `/rl-${i}` }, {
+      'x-forwarded-for': spamIp,
+      'user-agent': ua,
+    });
+    assert.equal(res.status, 204, `request ${i + 1} passes`);
+  }
+
+  // The 61st trips the limit: 429, Retry-After in seconds, JSON error body.
+  const over = await request('POST', '/api/collect', { path: '/rl-over' }, {
+    'x-forwarded-for': spamIp,
+    'user-agent': ua,
+  });
+  assert.equal(over.status, 429);
+  assert.match(over.headers['content-type'], /^application\/json/);
+  assert.match(over.headers['retry-after'], /^[1-9]\d*$/, 'retry-after is whole seconds > 0');
+  assert.deepEqual(over.json(), { ok: false, error: 'rate limited' });
+
+  // A rejected request must not take the loop down — health still answers, and
+  // another IP (a different key) is unaffected by the burst.
+  const health = await request('GET', '/api/health');
+  assert.equal(health.status, 200);
+  assert.equal(health.json().ok, true);
+  const other = await request('POST', '/api/collect', { path: '/rl-other' }, {
+    'x-forwarded-for': '198.51.100.78',
+    'user-agent': ua,
+  });
+  assert.equal(other.status, 204, 'a different client IP is not rate-limited');
+});
+
 // MUST stay the last test in this file: it deliberately breaks the shared
 // in-process DB so every database-backed route throws, and after() then shuts
 // the server down. No later test may rely on this server's DB.
