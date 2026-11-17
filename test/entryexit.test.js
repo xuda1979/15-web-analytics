@@ -146,6 +146,51 @@ test('filtered entry/exit pair visits with distinct uniques within the scope', (
   db.close();
 });
 
+test('refreshEntryExit: a mid-refresh failure rolls back the partial edge updates', () => {
+  const { db, secret } = fresh();
+  // One guest, four pages in a single visit. insertEvent stamps each row's
+  // entry/exit at insert time, so a refresh must rewrite the earlier rows'
+  // exits to the visit's final page (/b2). The sabotage trigger aborts the
+  // third UPDATE (the /abort-target row) AFTER the first two UPDATEs have
+  // already executed inside the transaction — the ROLLBACK in
+  // refreshEntryExit's catch (src/collector.js:187-189) must restore those
+  // partial writes, not just the aborted statement.
+  const ua = 'UA-Rollback';
+  post(db, secret, { pathname: '/a1', ip: '10.8.0.1', ua, ts: TUE });
+  post(db, secret, { pathname: '/a2', ip: '10.8.0.1', ua, ts: TUE + MIN });
+  post(db, secret, { pathname: '/abort-target', ip: '10.8.0.1', ua, ts: TUE + 2 * MIN });
+  post(db, secret, { pathname: '/b2', ip: '10.8.0.1', ua, ts: TUE + 3 * MIN });
+
+  const rows = () =>
+    db
+      .prepare('SELECT path, entry_path, exit_path, visit_key FROM events ORDER BY ts')
+      .all();
+  const before = rows();
+
+  // A BEFORE UPDATE trigger does not disturb the fixtures' INSERTs; it only
+  // fires at refresh time on the third per-row UPDATE (WHEN matches the
+  // abort-target path), by which point /a1 and /a2 have been rewritten.
+  db.exec(`
+    CREATE TRIGGER fail_refresh BEFORE UPDATE ON events
+    WHEN NEW.path = '/abort-target'
+    BEGIN SELECT RAISE(ABORT, 'sabotage: refresh update'); END
+  `);
+
+  try {
+    assert.throws(() => refreshEntryExit(db, TUE), 'the mid-refresh failure propagates');
+  } finally {
+    db.exec('DROP TRIGGER IF EXISTS fail_refresh');
+  }
+
+  assert.deepEqual(rows(), before, 'rollback restores entry_path/exit_path/visit_key for every row');
+  assert.equal(
+    rows().find((r) => r.path === '/a1').exit_path,
+    '/a1',
+    'the already-executed UPDATE (a1 exit -> /b2) was undone by the rollback',
+  );
+  db.close();
+});
+
 test('legacy events without visit_key get backfilled and still count correctly', () => {
   const { db, secret } = fresh();
   // Simulate rows written before visit_key existed: insert directly with NULL visit_key.
