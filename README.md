@@ -116,6 +116,7 @@ All settings are environment variables:
 | `WA_REALTIME_PATH` | `/api/realtime` | URL of the realtime endpoint |
 | `WA_EXPORT_PATH` | `/api/export` | URL of the export endpoint (the default `/api/export` stays active as an alias) |
 | `WA_AUDIT_PATH` | `/api/audit` | URL of the audit endpoint (the default `/api/audit` stays active as an alias) |
+| `WA_PUBLIC_DIR` | `./public` | Directory serving the static dashboard (`index.html`), the `style.css`, and the `wa.js` snippet. When it ships without an `index.html` the dashboard route renders a "not built" fallback, and the snippet falls back to the repo `public/` copy |
 
 ## Storage & privacy
 
