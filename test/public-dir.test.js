@@ -12,7 +12,7 @@
 // blob, a known-type css) in that dir. The snippet still resolves through
 // handleSnippet's second path (repo public/wa.js), pinning that fallback too.
 
-import { test, after } from 'node:test';
+import { test, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -122,4 +122,22 @@ test('the collect snippet still serves from the repo public/ when the custom dir
     fs.existsSync(path.join(import.meta.dirname, '..', 'public', 'wa.js')),
     'the repo fallback file exists',
   );
+});
+
+test('the snippet 404s only when both the custom dir and the repo fallback lack wa.js', async () => {
+  // handleSnippet probes config.publicDir/wa.js then the repo public/wa.js and
+  // only falls through to notFound when both are absent. The repo copy always
+  // exists on disk, so the fall-through is reachable only by mocking
+  // fs.existsSync to say no for both probes, then restoring it so the after()
+  // teardown (and this file's other tests) still see real files.
+  mock.method(fs, 'existsSync', () => false);
+  try {
+    const res = await request('GET', '/wa.js');
+    assert.equal(res.status, 404);
+    assert.equal(res.text(), 'not found');
+  } finally {
+    mock.restoreAll();
+  }
+  const real = await request('GET', '/wa.js');
+  assert.equal(real.status, 200, 'the repo fallback serves again after the mock is restored');
 });
