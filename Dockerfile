@@ -22,6 +22,9 @@ RUN npm ci --omit=dev
 COPY src ./src
 COPY public ./public
 
+# The MIT license text rides along with every distributed copy (MIT §1).
+COPY LICENSE ./
+
 ENV NODE_ENV=production \
     WA_HOST=0.0.0.0 \
     WA_PORT=8787 \
