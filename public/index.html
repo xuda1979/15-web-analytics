@@ -293,8 +293,8 @@
         bars('languages', data.languages, 'lang', 'visits');
         bars('screens', data.screens, 'screen', 'visits');
         hours('hourly', data.hourly);
-        table('entries', data.paths.entries, [{ k: 'path', h: 'Path' }, { k: 'visits', h: 'Entries', num: true }]);
-        table('exits', data.paths.exits, [{ k: 'path', h: 'Path' }, { k: 'visits', h: 'Exits', num: true }]);
+        table('entries', data.paths.entries, [{ k: 'path', h: 'Path' }, { k: 'visits', h: 'Entries', num: true }, { k: 'uniques', h: 'Uniq', num: true }]);
+        table('exits', data.paths.exits, [{ k: 'path', h: 'Path' }, { k: 'visits', h: 'Exits', num: true }, { k: 'uniques', h: 'Uniq', num: true }]);
         var series = state.gran === 'monthly' ? data.monthly
           : state.gran === 'weekly' ? data.weekly
           : data.daily;

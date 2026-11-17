@@ -292,31 +292,31 @@ export function entryExitPages(db, startMs, endMs, limit = 10) {
   const entries = db
     .prepare(
       `WITH first_of_visit AS (
-          SELECT path FROM events
+          SELECT path, guest_key FROM events
           WHERE ${w.sql} AND is_bot = 0 AND visit_key IS NOT NULL
             AND id = (SELECT MIN(id) FROM events e2
                       WHERE e2.visit_key = events.visit_key AND e2.is_bot = 0
                         AND ${w.sql})
        )
-       SELECT path, COUNT(*) AS visits
+       SELECT path, COUNT(*) AS visits, COUNT(DISTINCT guest_key) AS uniques
        FROM first_of_visit GROUP BY path ORDER BY visits DESC LIMIT ?`,
     )
     .all(...w.args, ...w.args, limit)
-    .map((r) => ({ path: r.path, visits: Number(r.visits) }));
+    .map((r) => ({ path: r.path, visits: Number(r.visits), uniques: Number(r.uniques) }));
   const exits = db
     .prepare(
       `WITH last_of_visit AS (
-          SELECT path FROM events
+          SELECT path, guest_key FROM events
           WHERE ${w.sql} AND is_bot = 0 AND visit_key IS NOT NULL
             AND id = (SELECT MAX(id) FROM events e2
                       WHERE e2.visit_key = events.visit_key AND e2.is_bot = 0
                         AND ${w.sql})
        )
-       SELECT path, COUNT(*) AS visits
+       SELECT path, COUNT(*) AS visits, COUNT(DISTINCT guest_key) AS uniques
        FROM last_of_visit GROUP BY path ORDER BY visits DESC LIMIT ?`,
     )
     .all(...w.args, ...w.args, limit)
-    .map((r) => ({ path: r.path, visits: Number(r.visits) }));
+    .map((r) => ({ path: r.path, visits: Number(r.visits), uniques: Number(r.uniques) }));
   return { entries, exits };
 }
 
@@ -751,12 +751,12 @@ export function entryExitFiltered(db, startMs, endMs, limit, fq) {
               AND e.ts >= ? AND e.ts <= ?
             GROUP BY e.visit_key
          )
-         SELECT e.path, COUNT(*) AS visits
+         SELECT e.path, COUNT(*) AS visits, COUNT(DISTINCT e.guest_key) AS uniques
          FROM edge JOIN events e ON e.id = eid
          GROUP BY e.path ORDER BY visits DESC LIMIT ?`,
       )
       .all(...args, startMs, endMs, limit)
-      .map((r) => ({ path: r.path, visits: Number(r.visits) }));
+      .map((r) => ({ path: r.path, visits: Number(r.visits), uniques: Number(r.uniques) }));
 
   return { entries: firstLast('MIN'), exits: firstLast('MAX') };
 }

@@ -26,7 +26,8 @@ local SQLite file, no third-party services.
   systems, visitor languages, screen sizes (top lists pair every visit count
   with the distinct uniques behind it), visits by hour of day (UTC,
   pageviews + distinct uniques per hour), referring pages, page titles, and
-  entry/exit pages.
+  entry/exit pages (each also paired with the distinct uniques landing on /
+  leaving from it).
 - Real-time view (last 5 minutes, per-minute buckets) and day / week / month
   aggregate views (the dashboard chart switches granularity, overlaying a
   distinct-uniques trend line on the pageview bars; the realtime sparkline

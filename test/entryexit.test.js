@@ -8,6 +8,9 @@
 //      stream in (refreshEntryExit finalizes in-flight visits)
 //   3. apply page filters to the *visit* (a visit touching the filtered page
 //      is included, and reports that visit's real entry/exit pages)
+//   4. pair each edge's visit count with the distinct uniques behind it (two
+//      visits from the same guest count 2 visits but 1 unique, mirroring the
+//      other top lists)
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -102,6 +105,44 @@ test('filtered entry/exit: pages filter the visit, entry/exit remain the visit e
     [['/end', 1]],
     'visit touching /featured reports its true exit /end',
   );
+  db.close();
+});
+
+test('entry/exit pair every edge with distinct uniques (same guest twice = 2 visits, 1 unique)', () => {
+  const { db, secret } = fresh();
+  // Guest X enters /landing twice (two separate visits).
+  post(db, secret, { pathname: '/landing', ip: '10.0.0.6', ua: UA, ts: TUE });
+  post(db, secret, { pathname: '/landing', ip: '10.0.0.6', ua: UA, ts: TUE + 2 * 3600_000 });
+  // Guest Y enters /landing once.
+  post(db, secret, { pathname: '/landing', ip: '10.0.0.7', ua: UA, ts: TUE + 45 * MIN });
+
+  const r = entryExitPages(db, TUE, TUE + 4 * 3600_000, 10);
+  const landing = r.entries.find((e) => e.path === '/landing');
+  assert.equal(landing?.visits, 3, 'three visits entered /landing');
+  assert.equal(landing?.uniques, 2, 'two distinct guests are behind those visits');
+  assert.ok(r.entries.every((e) => e.uniques != null), 'every entry row carries uniques');
+  assert.ok(r.exits.every((e) => e.uniques != null), 'every exit row carries uniques');
+  db.close();
+});
+
+test('filtered entry/exit pair visits with distinct uniques within the scope', () => {
+  const { db, secret } = fresh();
+  // Two visits from two guests both touch /featured.
+  post(db, secret, { pathname: '/a', ip: '10.0.0.8', ua: UA, ts: TUE });
+  post(db, secret, { pathname: '/featured', ip: '10.0.0.8', ua: UA, ts: TUE + MIN });
+  post(db, secret, { pathname: '/featured', ip: '10.0.0.9', ua: UA, ts: TUE + 60 * MIN });
+  post(db, secret, { pathname: '/featured', ip: '10.0.0.9', ua: UA, ts: TUE + 61 * MIN });
+
+  const span = [TUE, TUE + 2 * 3600_000];
+  const fq = { sql: 'path = ?', args: ['/featured'] };
+  const r = entryExitFiltered(db, span[0], span[1], 10, fq);
+  const entryA = r.entries.find((e) => e.path === '/a');
+  const entryF = r.entries.find((e) => e.path === '/featured');
+  const exitF = r.exits.find((e) => e.path === '/featured');
+  assert.equal(entryA?.uniques, 1, 'single guest entered via /a');
+  assert.equal(entryF?.uniques ?? 0, 1, 'single guest is behind the /featured entries');
+  assert.equal(exitF?.visits, 2, 'two visits exited on /featured');
+  assert.equal(exitF?.uniques, 2, 'distinct guests across those two exit visits');
   db.close();
 });
 

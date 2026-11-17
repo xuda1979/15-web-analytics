@@ -210,6 +210,11 @@ test('sources / devices / browsers / paths (entry+exit) are reported', async () 
   assert.ok(json.browsers.length >= 1, 'browsers list non-empty');
   assert.ok(Array.isArray(json.paths.entries) && json.paths.entries.length >= 1);
   assert.ok(Array.isArray(json.paths.exits) && json.paths.exits.length >= 1);
+  assert.ok(
+    json.paths.entries.every((e) => typeof e.uniques === 'number' && e.uniques >= 1) &&
+      json.paths.exits.every((e) => typeof e.uniques === 'number' && e.uniques >= 1),
+    'entry/exit rows pair visits with distinct uniques',
+  );
 });
 
 test('filters: page + source + device narrow the numbers', async () => {
@@ -867,6 +872,17 @@ test('dashboard serves static HTML', async () => {
   // per-hour uniques next to each hour's visits.
   assert.ok(html.includes("function hours(target, rows)"), 'dashboard renders the full 24h axis');
   assert.ok(/uniq/.test(html), 'dashboard shows per-hour uniques');
+  // The entry/exit page tables pair each edge's visit count with the distinct
+  // uniques behind it, like every other top list (a bare count hides the
+  // visitor-vs-pageview distinction the other cards expose).
+  assert.ok(
+    html.includes('table(\'entries\', data.paths.entries, [{ k: \'path\', h: \'Path\' }, { k: \'visits\', h: \'Entries\', num: true }, { k: \'uniques\', h: \'Uniq\', num: true }])'),
+    'entries table renders a distinct-uniques column',
+  );
+  assert.ok(
+    html.includes('table(\'exits\', data.paths.exits, [{ k: \'path\', h: \'Path\' }, { k: \'visits\', h: \'Exits\', num: true }, { k: \'uniques\', h: \'Uniq\', num: true }])'),
+    'exits table renders a distinct-uniques column',
+  );
   // Every top-list bar also carries the distinct-uniques count for that row
   // (same "visits / N uniq" style as the hourly card): bars() appends it to
   // the value column when the row exposes an uniques field.
