@@ -99,6 +99,50 @@ test('prune: exceeding the visit window splits one guest into two visits', () =>
   db.close();
 });
 
+test('prune: a cutoff that deletes nothing is a no-op — caches and meta untouched', () => {
+  const { db, secret } = fresh();
+  const now = Date.now();
+
+  // All events sit on or after the cutoff, so nothing qualifies for deletion.
+  post(db, secret, { pathname: '/fresh', ip: '10.4.0.1', ua: 'UA-N', ts: now });
+  post(db, secret, { pathname: '/exact', ip: '10.4.0.2', ua: 'UA-N', ts: now - 1 * DAY });
+
+  const aggRows = () => ({
+    rt: db.prepare('SELECT count(*) n FROM agg_daily_realtime').get().n,
+    buckets: db.prepare('SELECT count(*) n FROM agg_monthly_buckets').get().n,
+  });
+  assert.deepEqual(aggRows(), { rt: 2, buckets: 2 }, 'write-through caches populated by the inserts');
+
+  const cutoff = now - 1 * DAY; // strictly-interior cutoff: the exact-1d event survives (`ts < cutoff` only)
+  const res = pruneEvents(db, cutoff);
+  assert.equal(res.deleted, 0, 'nothing matched the cutoff');
+  assert.equal(res.cutoff_ts, cutoff, 'cutoff_ts echoes the caller');
+  assert.equal(db.prepare('SELECT count(*) n FROM events').get().n, 2, 'events table untouched');
+
+  // The `if (deleted > 0)` guard must not fire: no cache wipe, no last_prune row.
+  assert.deepEqual(aggRows(), { rt: 2, buckets: 2 }, 'agg caches are not wiped on a no-op');
+  assert.equal(db.prepare(`SELECT count(*) n FROM meta WHERE key = 'last_prune'`).get().n, 0, 'no prune run is recorded');
+
+  // Dashboard invariant still holds after the no-op.
+  const range = [now - 2 * DAY, now];
+  const t = totals(db, range[0], range[1]);
+  assert.equal(t.visits, 2);
+  assert.equal(sumVisits(dailySeries(db, range[0], range[1])), t.visits, 'series still sum to totals');
+
+  db.close();
+});
+
+test('prune: an empty DB never records a last_prune run', () => {
+  const { db } = fresh();
+
+  const res = pruneEvents(db, Date.now());
+  assert.equal(res.deleted, 0, 'no rows to delete');
+  assert.equal(db.prepare(`SELECT count(*) n FROM meta WHERE key = 'last_prune'`).get().n, 0, 'meta stays bare');
+  assert.equal(db.prepare('SELECT count(*) n FROM agg_daily_realtime').get().n, 0, 'caches stay empty');
+
+  db.close();
+});
+
 test('prune: bot events are deleted but stay absent from metrics', () => {
   const { db, secret } = fresh();
   const now = Date.now();
