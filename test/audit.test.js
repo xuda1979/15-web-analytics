@@ -212,6 +212,60 @@ test('data_retention passes with fresh events and surfaces meta.last_prune', () 
   assert.equal(report.config.last_prune, LAST_PRUNE, 'last_prune echoed verbatim');
 });
 
+test('read failures: an excluded snippet still yields a full 7-check report', () => {
+  // snippetBytes() (audit.js 16-22) returns null for a snippet the operator's
+  // deployment does not ship, and cookieEvidence()'s catch (159-161) drops the
+  // snippet target from its scanned set when readFileSync throws. Both reads go
+  // through config.publicDir: point it at an empty directory so wa.js is
+  // genuinely absent, then verify the report flips snippet_size to fail, still
+  // cites the server source (scanned 1 file), and assembles all 7 checks.
+  const { db } = fresh();
+  const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-nosnip-'));
+  try {
+    const report = withCfg({ publicDir: emptyDir }, () => generateAudit(db));
+    const byId = Object.fromEntries(report.checks.map((c) => [c.id, c]));
+    assert.equal(byId.snippet_size.status, 'fail', 'snippet_size fails — status flips');
+    assert.match(byId.snippet_size.detail, /could not be measured — the file is missing/);
+    assert.match(byId.no_cookies.detail, /No Set-Cookie writes in the server source/);
+    assert.match(byId.no_cookies.detail, /scanned 1 file/, 'the snippet target is excluded from the scanned set');
+    assert.equal(report.checks.length, 7, 'the missing snippet must not collapse the report');
+    assert.equal(byId.region_only.status, 'pass', 'server-side scanners are unaffected');
+    assert.equal(byId.local_storage.status, 'pass');
+    assert.equal(report.pass_count, 6, 'only snippet_size fails');
+    assert.equal(report.warn_count, 0);
+  } finally {
+    fs.rmSync(emptyDir, { recursive: true, force: true });
+  }
+  db.close();
+});
+
+test('read failures: an unreadable src module is excluded from both scanners', () => {
+  // outboundEvidence() and regionEvidence() both guard their per-file
+  // readFileSync with a catch-and-continue (191-192, 228-229). Make one src
+  // module unreadable at report time (a permission collision a fresh deploy
+  // could actually hit): the scanner counts the surviving 11 files and the
+  // report still passes every check, because the unreadable file contributed
+  // no hits to either pattern.
+  const { db } = fresh();
+  const file = path.join(import.meta.dirname, '..', 'src', 'ua.js');
+  const mode = (fs.statSync(file).mode & 0o777).toString(8);
+  try {
+    fs.chmodSync(file, 0o000);
+    const report = generateAudit(db);
+    const byId = Object.fromEntries(report.checks.map((c) => [c.id, c]));
+    assert.match(byId.region_only.detail, /scanned 11 files/, 'region scanner excludes the unreadable module');
+    assert.match(byId.local_storage.detail, /scanned 11 files/, 'outbound scanner excludes it too');
+    assert.equal(byId.region_only.status, 'pass', 'no hits, so the check still passes');
+    assert.equal(byId.local_storage.status, 'pass');
+    assert.equal(report.checks.length, 7);
+    assert.equal(report.pass_count, 7);
+  } finally {
+    fs.chmodSync(file, Number.parseInt(mode, 8));
+  }
+  assert.ok(fs.statSync(file).mode & 0o444, 'src/ua.js permissions restored');
+  db.close();
+});
+
 test('stats: a database larger than 1 MiB renders bytes_readable in MB', () => {
   const { db } = fresh();
   // A live database past 1 MiB is normal production posture; dbstat sums every
