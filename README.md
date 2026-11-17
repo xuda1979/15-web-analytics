@@ -110,6 +110,12 @@ All settings are environment variables:
 | `WA_COLLECT_RATE_WINDOW_MS` | `60000` | Rate-limit window for collect |
 | `WA_STORE_IP` | `0` | Set `1` to store cleartext IPs (audit flags this) |
 | `WA_RETENTION_DAYS` | `0` | Delete events older than this many days at startup + every 6h (`0` disables); the CLI `prune` subcommand runs it on demand |
+| `WA_SNIPPET_PATH` | `/wa.js` | URL of the collector snippet |
+| `WA_COLLECT_PATH` | `/api/collect` | URL of the collect POST endpoint; the snippet defaults to it (override client-side with the script's `data-endpoint` attribute or `window.waEndpoint`) |
+| `WA_OVERVIEW_PATH` | `/api/overview` | URL of the overview endpoint (the default `/api/overview` stays active as an alias) |
+| `WA_REALTIME_PATH` | `/api/realtime` | URL of the realtime endpoint |
+| `WA_EXPORT_PATH` | `/api/export` | URL of the export endpoint (the default `/api/export` stays active as an alias) |
+| `WA_AUDIT_PATH` | `/api/audit` | URL of the audit endpoint (the default `/api/audit` stays active as an alias) |
 
 ## Storage & privacy
 
