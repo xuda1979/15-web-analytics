@@ -28,18 +28,27 @@ import {
   topPages,
   topSources,
   topDevices,
+  topDevicesFiltered,
   topModels,
+  topModelsFiltered,
   topBrowsers,
   topBrowsersFiltered,
   topCountries,
+  topCountriesFiltered,
   topOses,
+  topOsesFiltered,
   topLanguages,
+  topLanguagesFiltered,
   topScreens,
+  topScreensFiltered,
   topTitles,
+  topTitlesFiltered,
   topReferrers,
+  topReferrersFiltered,
   topPagesFiltered,
   topSourcesFiltered,
   hourlySeries,
+  hourlySeriesFiltered,
   realtime,
   totals,
   totalsFiltered,
@@ -230,6 +239,82 @@ test('filtered top lists honor the page filter', () => {
   assert.deepEqual(topPagesFiltered(db, T, T + SPAN, 1, fq), [
     { path: '/paid', visits: 2, uniques: 1 },
   ], 'filtered variant still binds LIMIT');
+});
+
+test('filtered label breakdowns narrow by filter and keep the NULL/empty guards and bot exclusion', () => {
+  // One guest hits the filter's page twice (window of exactly one brand-new
+  // visitor), one hits a different page (out of filter), one page is under the
+  // filter but carries a void row for every guardable label column, and one bot
+  // hits the filtered page. Contract split along the real schema lines:
+  //   - model/country/lang/screen/title/referrer carry IS NOT NULL && != ''
+  //     guards (their columns are optional at collect time), so the void row
+  //     is dropped from those breakdowns;
+  //   - device/os are UA-derived and always present at collect time, so the
+  //     filtered variants group them without a guard — every in-filter row
+  //     shows up, void dimensions included.
+  // Every read path excludes bots, and the g3 /free row stays out of all of
+  // them via the filter itself.
+  const { db, insert } = fresh();
+  const fq = { sql: 'path = ?', args: ['/paid'] };
+  const row = {
+    guest_key: 'g1', ts: T, path: '/paid', device: 'mobile', device_model: 'iPhone',
+    country: 'us', os: 'iOS', lang: 'en', screen_w: 390, screen_h: 844,
+    title: 'Real', referrer: 'https://g.com/x',
+  };
+  insert(row);
+  insert({ ...row, guest_key: 'g1', ts: T + MIN });
+  // Hits the filter's page, but every guardable label column is void; device
+  // and os are still set (UA-derived columns carry no guard).
+  insert({ ...row, guest_key: 'g2', ts: T + 2 * MIN, device: 'desktop', os: 'Android', device_model: null, country: null, lang: null, screen_w: null, screen_h: null, title: null, referrer: null });
+  // Outside the filter.
+  insert({ ...row, guest_key: 'g3', ts: T + 3 * MIN, path: '/free' });
+  // Bot on the filter's page -> invisible to every read path.
+  insert({ ...row, guest_key: 'g4', ts: T + 4 * MIN, is_bot: 1 });
+
+  // The guardable columns: the void row is dropped, leaving only g1's label.
+  assert.deepEqual(topModelsFiltered(db, T, T + SPAN, 10, fq), [{ model: 'iPhone', visits: 2, uniques: 1 }]);
+  assert.deepEqual(topCountriesFiltered(db, T, T + SPAN, 10, fq), [{ country: 'us', visits: 2, uniques: 1 }]);
+  assert.deepEqual(topLanguagesFiltered(db, T, T + SPAN, 10, fq), [{ lang: 'en', visits: 2, uniques: 1 }]);
+  assert.deepEqual(topScreensFiltered(db, T, T + SPAN, 10, fq), [{ screen: '390x844', visits: 2, uniques: 1 }]);
+  assert.deepEqual(topTitlesFiltered(db, T, T + SPAN, 10, fq), [{ title: 'Real', visits: 2, uniques: 1 }]);
+  assert.deepEqual(topReferrersFiltered(db, T, T + SPAN, 10, fq), [{ referrer: 'https://g.com/x', visits: 2, uniques: 1 }]);
+  // device/os group without a guard: the void row's values survive the filter.
+  assert.deepEqual(topDevicesFiltered(db, T, T + SPAN, 10, fq), [
+    { device: 'mobile', visits: 2, uniques: 1 },
+    { device: 'desktop', visits: 1, uniques: 1 },
+  ]);
+  assert.deepEqual(topOsesFiltered(db, T, T + SPAN, 10, fq), [
+    { os: 'iOS', visits: 2, uniques: 1 },
+    { os: 'Android', visits: 1, uniques: 1 },
+  ]);
+
+  // LIMIT binds on the label-bearing branch, not just the delegation.
+  assert.deepEqual(topModelsFiltered(db, T, T + SPAN, 1, fq), [{ model: 'iPhone', visits: 2, uniques: 1 }]);
+  db.close();
+});
+
+test('hourlySeriesFiltered zero-fills 24 hours and honors the filter and bot exclusion', () => {
+  const { db, insert } = fresh();
+  const fq = { sql: 'path = ?', args: ['/only'] };
+
+  insert({ guest_key: 'g1', ts: T, path: '/only' });                 // 09:00 UTC, in filter
+  insert({ guest_key: 'g1', ts: T + MIN, path: '/only' });           // 09:00 UTC, same guest
+  insert({ guest_key: 'g2', ts: T + 2 * HOUR, path: '/only' });      // 11:00 UTC, in filter
+  insert({ guest_key: 'g3', ts: T + HOUR, path: '/other' });         // 10:00 UTC, out of filter
+  insert({ guest_key: 'g4', ts: T + 3 * HOUR, path: '/only', is_bot: 1 }); // bot on the filtered page
+
+  const series = hourlySeriesFiltered(db, T, T + 4 * HOUR, fq);
+  assert.equal(series.length, 24);
+  assert.deepEqual(series.map((s) => s.hour), Array.from({ length: 24 }, (_, h) => h));
+  assert.deepEqual(
+    series.filter((s) => s.visits > 0).map((s) => s),
+    [
+      { hour: 9, visits: 2, uniques: 1 },
+      { hour: 11, visits: 1, uniques: 1 },
+    ],
+    'filtered-out and bot traffic never materialize, same zero-fill contract as hourlySeries',
+  );
+  db.close();
 });
 
 test('hourlySeries zero-fills all 24 UTC hours', () => {
