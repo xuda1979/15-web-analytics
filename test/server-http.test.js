@@ -312,6 +312,78 @@ test('collect: a burst past the rate limit answers 429 and keeps the loop alive'
   assert.equal(other.status, 204, 'a different client IP is not rate-limited');
 });
 
+test('export: a filtered CSV summary serializes every section under the filter', async () => {
+  const { request } = await startServer();
+
+  // Two distinct paths, two distinct IPs, so the ordering and the filtering
+  // are unambiguous. The shared in-process DB also carries sibling tests'
+  // rows, hence the days=30 window and per-test unique paths.
+  await request('POST', '/api/collect', { path: '/fdsum/a' }, {
+    'x-forwarded-for': '198.51.100.60',
+    'user-agent': 'UA-Fdsum',
+  });
+  await request('POST', '/api/collect', { path: '/fdsum/b' }, {
+    'x-forwarded-for': '198.51.100.61',
+    'user-agent': 'UA-Fdsum',
+  });
+
+  const csv = await request('GET', '/api/export?days=30&format=csv&summary=1&page=/fdsum/a');
+  assert.match(csv.headers['content-type'], /^text\/csv; charset=utf-8$/);
+  assert.match(
+    csv.headers['content-disposition'],
+    /^attachment; filename="events-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-\d{2}\.csv"$/,
+    'a filtered summary stays an attachment',
+  );
+
+  // exportSummary joins sections with \n\n, so inside a section body index 0-1
+  // are blank, index 2 is the column header, and the rows start at index 3.
+  const pagesLines = csv.text().split('# pages')[1].split('\n');
+  assert.match(pagesLines[3] ?? '', /fdsum\/a/, 'the pages section carries the filtered path row');
+  assert.doesNotMatch(pagesLines[3] ?? '', /fdsum\/b/, 'the sibling path is filtered out of the pages section');
+
+  const totalsBlock = csv.text().split('# totals')[1].split('# visit_stats')[0];
+  assert.match(totalsBlock, /visits,uniques\n1,1/, 'totals reflect only the filtered path');
+});
+
+test('export: the unfiltered CSV summary contrasts by counting every row', async () => {
+  const { request } = await startServer();
+
+  // The shared in-process DB carries dozens of sibling rows (the 60 /rl-*
+  // rate-limit paths dominate the top-50 pages list), so a pages-section
+  // presence check would be fragile here. The contrast that matters: the
+  // unfiltered summary counts all rows — which the filtered 1,1 total above
+  // must narrow — while the filtered variant counts only the one path.
+  await request('POST', '/api/collect', { path: '/fdsun/a' }, {
+    'x-forwarded-for': '198.51.100.62',
+    'user-agent': 'UA-Fdsun',
+  });
+  await request('POST', '/api/collect', { path: '/fdsun/b' }, {
+    'x-forwarded-for': '198.51.100.63',
+    'user-agent': 'UA-Fdsun',
+  });
+
+  const csv = await request('GET', '/api/export?days=30&format=csv&summary=1');
+  assert.match(csv.headers['content-type'], /^text\/csv; charset=utf-8$/);
+  const totalsLine = csv.text().split('# totals')[1].split('# visit_stats')[0].trim().split('\n')[1];
+  const visits = Number(totalsLine.split(',')[0]);
+  assert.ok(visits > 1, `unfiltered summary counts every row (visits=${visits})`);
+  assert.ok(csv.text().includes('# pages'), 'the unfiltered summary still serializes the pages section');
+});
+
+test('audit: the text=1 shorthand renders the same plain-text report', async () => {
+  const { request } = await startServer();
+
+  const alias = await request('GET', '/api/audit?text=1');
+  assert.match(alias.headers['content-type'], /^text\/plain; charset=utf-8$/);
+  assert.match(alias.text(), /^Privacy Audit Report — 15-web-analytics/m, 'alias renders the text report');
+
+  const canonical = await request('GET', '/api/audit?format=text');
+  assert.match(canonical.headers['content-type'], /^text\/plain; charset=utf-8$/);
+  // generated_at is re-stamped per request, so drop that line before comparing.
+  const stripStamp = (t) => t.split('\n').filter((l) => !l.startsWith('Generated: ')).join('\n');
+  assert.equal(stripStamp(alias.text()), stripStamp(canonical.text()), 'text=1 and format=text render an identical report');
+});
+
 // MUST stay the last test in this file: it deliberately breaks the shared
 // in-process DB so every database-backed route throws, and after() then shuts
 // the server down. No later test may rely on this server's DB.
