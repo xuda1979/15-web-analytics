@@ -172,8 +172,10 @@ async function handleCollect(req, res) {
     res.end(JSON.stringify({ ok: false, error: 'bad payload' }));
     return;
   }
+  // Reuse clientIp(req): identical alias precedence as the rate-limiter key,
+  // so the identity governing throttling can never disagree with the one stored.
   const meta = {
-    ip: req.headers['x-real-ip'] || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || '',
+    ip: clientIp(req),
     ua: req.headers['user-agent'] || '',
     country: req.headers['x-country'] || '',
   };
