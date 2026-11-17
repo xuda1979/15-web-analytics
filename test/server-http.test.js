@@ -269,3 +269,31 @@ test('hardening: every response carries the no-store and nosniff headers', async
     assert.equal(res.headers['referrer-policy'], 'strict-origin-when-cross-origin', url);
   }
 });
+
+// MUST stay the last test in this file: it deliberately breaks the shared
+// in-process DB so every database-backed route throws, and after() then shuts
+// the server down. No later test may rely on this server's DB.
+test('error handling: a DB failure yields a 500 JSON body and a live server', async () => {
+  const { request, db } = await startServer();
+
+  // Sabotage the raw store so the next overview read throws mid-request. The
+  // events table is the source of truth every analytics query reads, which is
+  // exactly why its absence trips the top-level catch rather than the route.
+  db.exec('DROP TABLE events');
+
+  const res = await request('GET', '/api/overview?days=1');
+  assert.equal(res.status, 500, 'the top-level catch answers 500');
+  assert.match(res.headers['content-type'], /^application\/json/);
+  assert.deepEqual(res.json(), { ok: false, error: 'internal' });
+
+  // The catch path must still carry the baseline hardening headers, which are
+  // set before the try block.
+  assert.match(res.headers['cache-control'], /no-store/);
+  assert.equal(res.headers['x-content-type-options'], 'nosniff');
+
+  // The failure must not take the process down: /api/health touches no table
+  // and still answers through the same request loop.
+  const health = await request('GET', '/api/health');
+  assert.equal(health.status, 200);
+  assert.equal(health.json().ok, true);
+});
