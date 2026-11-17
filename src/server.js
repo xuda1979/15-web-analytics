@@ -269,6 +269,15 @@ function handleExport(req, res) {
   const cd = format === 'csv' ? `attachment; filename="events-${dayKey(start)}-${dayKey(end)}.csv"` : undefined;
   res.writeHead(200, { 'content-type': ct, ...(cd ? { 'content-disposition': cd } : {}) });
 
+  // A HEAD probe asks for the same representation as GET (RFC 9110 §9.3.2)
+  // with no body; Node suppresses the body for us, but running the streaming
+  // loop below would still iterate and serialize every row in range just to
+  // throw the output away. Headers are already sent above, so stop here.
+  if (req.method === 'HEAD') {
+    res.end();
+    return;
+  }
+
   if (!summary) {
     // Raw event export: stream rows out of SQLite so a multi-year export never
     // materializes the full result (or a single giant body string) in memory.

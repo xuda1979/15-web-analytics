@@ -280,7 +280,10 @@ test('routing: HEAD mirrors GET on every read route and sends no body', async ()
 
   // The GET response of the same URL gives the expected status; a HEAD must
   // match it but deliver zero body bytes (curl -I / uptime probes included).
-  const cases = ['/', '/wa.js', '/api/overview', '/api/realtime', '/api/audit', '/api/health', '/static/style.css'];
+  // /api/export is the one streaming route: its HEAD must keep the same
+  // status/content-type while sending no body (the handler skips the row
+  // streaming loop entirely on HEAD).
+  const cases = ['/', '/wa.js', '/api/overview', '/api/realtime', '/api/audit', '/api/health', '/api/export?days=30', '/api/export?days=30&format=csv', '/static/style.css'];
   for (const url of cases) {
     const viaGet = await request('GET', url);
     const viaHead = await rawRequest(port, 'HEAD', url);
