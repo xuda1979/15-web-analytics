@@ -241,17 +241,23 @@ test('read failures: an excluded snippet still yields a full 7-check report', ()
 
 test('read failures: an unreadable src module is excluded from both scanners', () => {
   // outboundEvidence() and regionEvidence() both guard their per-file
-  // readFileSync with a catch-and-continue (191-192, 228-229). Make one src
-  // module unreadable at report time (a permission collision a fresh deploy
-  // could actually hit): the scanner counts the surviving 11 files and the
-  // report still passes every check, because the unreadable file contributed
-  // no hits to either pattern.
+  // readFileSync with a catch-and-continue. Make one src module unreadable at
+  // report time (a permission collision a fresh deploy could actually hit): the
+  // scanner counts the surviving 11 files and the report still passes every
+  // check, because the unreadable file contributed no hits to either pattern.
+  //
+  // The sabotage runs against a throwaway COPY of the source, injected via
+  // generateAudit's opts.srcDir. Chmod'ing a live shared module (src/ua.js)
+  // used to race sibling test processes, which import it in parallel and got
+  // EACCES while the file sat at 0o000.
   const { db } = fresh();
-  const file = path.join(import.meta.dirname, '..', 'src', 'ua.js');
-  const mode = (fs.statSync(file).mode & 0o777).toString(8);
+  const srcDir = path.join(import.meta.dirname, '..', 'src');
+  const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-srccopy-'));
+  const work = path.join(workRoot, 'src');
   try {
-    fs.chmodSync(file, 0o000);
-    const report = generateAudit(db);
+    fs.cpSync(srcDir, work, { recursive: true });
+    fs.chmodSync(path.join(work, 'ua.js'), 0o000);
+    const report = generateAudit(db, { srcDir: work });
     const byId = Object.fromEntries(report.checks.map((c) => [c.id, c]));
     assert.match(byId.region_only.detail, /scanned 11 files/, 'region scanner excludes the unreadable module');
     assert.match(byId.local_storage.detail, /scanned 11 files/, 'outbound scanner excludes it too');
@@ -260,9 +266,9 @@ test('read failures: an unreadable src module is excluded from both scanners', (
     assert.equal(report.checks.length, 7);
     assert.equal(report.pass_count, 7);
   } finally {
-    fs.chmodSync(file, Number.parseInt(mode, 8));
+    fs.rmSync(workRoot, { recursive: true, force: true });
   }
-  assert.ok(fs.statSync(file).mode & 0o444, 'src/ua.js permissions restored');
+  assert.ok(fs.statSync(path.join(srcDir, 'ua.js')).mode & 0o444, 'live src/ua.js is never touched');
   db.close();
 });
 

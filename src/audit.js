@@ -174,8 +174,7 @@ function cookieEvidence() {
 // prose. The client snippet (public/wa.js) is deliberately NOT scanned: its
 // sendBeacon/XHR is the ingestion path (browser -> this server), the product's
 // core function, not an off-box transfer.
-function outboundEvidence() {
-  const dir = import.meta.dirname;
+function outboundEvidence(dir = import.meta.dirname) {
   let files = 0;
   let lines = 0;
   const hits = [];
@@ -211,8 +210,7 @@ function outboundEvidence() {
 // pattern deliberately omits the literal word "geolocation": server.js ships a
 // Permissions-Policy: geolocation=() denial header, which is evidence FOR this
 // check (browser geolocation is blocked), not a violation.
-function regionEvidence() {
-  const dir = import.meta.dirname;
+function regionEvidence(dir = import.meta.dirname) {
   let files = 0;
   let lines = 0;
   const hits = [];
@@ -239,7 +237,13 @@ function regionEvidence() {
   return { files, lines, hits };
 }
 
-export function generateAudit(db) {
+export function generateAudit(db, opts = {}) {
+  // `opts.srcDir` lets the src-tree scanners (outboundEvidence,
+  // regionEvidence) run against a caller-supplied tree. Default is the real
+  // source dir; tests use a throwaway copy so a sabotaged file can never race
+  // sibling test processes importing a shared module (a live chmod 0o000 on
+  // src/ua.js made parallel runs flake with EACCES).
+  const srcDir = opts.srcDir ?? import.meta.dirname;
   const lastPrune = db
     .prepare(`SELECT value FROM meta WHERE key = 'last_prune'`)
     .get()?.value ?? null;
@@ -296,8 +300,8 @@ export function generateAudit(db) {
   const snippetByteCount = snippetBytes();
 
   const cookie = cookieEvidence();
-  const outbound = outboundEvidence();
-  const region = regionEvidence();
+  const outbound = outboundEvidence(srcDir);
+  const region = regionEvidence(srcDir);
 
   const checks = [
     {
