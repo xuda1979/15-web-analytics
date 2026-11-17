@@ -112,6 +112,27 @@ test('exportEvents CSV carries a stable header and equals the JSON contract', ()
   }
 });
 
+test('exportEvents CSV neutralizes formula injection in visitor-controlled cells', () => {
+  const { db, dir } = fresh();
+  try {
+    db.prepare(
+      'INSERT INTO events (ts, visited_at, guest_key, ip, ua, path, title, referrer) VALUES (?,?,?,?,?,?,?,?)',
+    ).run(
+      T, new Date(T).toISOString(), 'g1', '203.0.113.9', 'Test/1.0',
+      '=HYPERLINK("https://evil")', '=SUM(1,1)', '@import-x',
+    );
+
+    const csv = exportEvents(db, T, T + SPAN, 'csv');
+    const body = csv.trim().split('\n')[1];
+    assert.ok(body.includes("'=HYPERLINK"), 'path formula neutralized');
+    assert.ok(body.includes("'=SUM(1,1)"), 'title formula neutralized');
+    assert.ok(body.includes("'@import-x"), 'referrer formula neutralized');
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('exportSummary JSON carries every dashboard section, empty DB included', () => {
   const { db, dir } = fresh();
   try {

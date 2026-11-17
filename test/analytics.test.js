@@ -492,3 +492,38 @@ test('toCsv quotes commas, quotes, newlines, and renders null as empty', () => {
   );
   assert.equal(toCsv([], ['a']), 'a\n', 'headers alone for an empty row set');
 });
+
+test('toCsv neutralizes spreadsheet formula injection (CWE-1236)', () => {
+  const rows = [
+    { a: '=SUM(1,1)', b: '+cmd' },
+    { a: '-CMD', b: '@import' },
+    { a: '\ttab', b: '\rCR' },
+    { a: '=has"inner"quote', b: null },
+    { a: '/about', b: '9-5' },
+    { a: '', b: '=only-empty-quoted' },
+  ];
+  const out = toCsv(rows, ['a', 'b']);
+  // Formula metacharacters get a leading single-quote neutralizer (then
+  // normal CSV quoting applies when the cell also contains structure chars).
+  assert.equal(out.includes("'=SUM(1,1)"), true, 'leading = is neutralized');
+  assert.equal(out.includes("'+cmd"), true, 'leading + is neutralized');
+  assert.equal(out.includes("'-CMD"), true, 'leading - is neutralized');
+  assert.equal(out.includes("'@import"), true, 'leading @ is neutralized');
+  assert.equal(out.includes("'\ttab"), true, 'leading tab is neutralized');
+  assert.equal(out.includes("'\rCR"), true, 'leading CR is neutralized');
+  assert.equal(
+    out.includes('"\'=has""inner""quote"'),
+    true,
+    'neutralization composes with existing quoting rules',
+  );
+  // Plain values that merely *contain* or *end in* metacharacters are untouched.
+  assert.equal(out.includes('/about'), true);
+  assert.equal(out.includes('9-5'), true);
+  // Empty cells stay empty even though the header/neighbor may be malicious.
+  assert.equal(out.includes(',\n'), true);
+  assert.equal(
+    toCsv([{ a: '=1+1' }], ['a']),
+    'a\n\'=1+1\n',
+    'exact cell shape stays deterministic',
+  );
+});
