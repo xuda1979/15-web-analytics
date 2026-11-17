@@ -57,6 +57,48 @@ function rawRequest(port, method, url, body, headers = {}) {
   });
 }
 
+// Sends a request and captures the outcome even when the server kills the
+// socket mid-body (oversized payloads: readJsonBody destroys the request, so
+// the client sees ECONNRESET and never an HTTP status line).
+function rawRequestCapture(port, method, url, body, headers = {}) {
+  return new Promise((resolve) => {
+    const req = http.request(
+      { host: '127.0.0.1', port, method, path: url, headers },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          resolve({ status: res.statusCode, text: () => buf.toString('utf8') });
+        });
+      },
+    );
+    req.on('error', (err) => resolve({ status: null, error: err.code }));
+    req.write(body);
+    req.end();
+  });
+}
+
+test('collect: an oversized payload trips a hard connection reset, not a 4xx', async () => {
+  const { port, request } = await startServer();
+
+  // ~6 KB of JSON pushes readJsonBody (4096-byte limit) over the edge, so it
+  // rejects and destroys the request socket.
+  const big = { path: '/oversized', title: 'x'.repeat(6000) };
+  const res = await rawRequestCapture(port, 'POST', '/api/collect', JSON.stringify(big), {
+    'content-type': 'application/json',
+    'user-agent': 'UA-Big',
+  });
+
+  assert.equal(res.status, null, 'no HTTP status is ever delivered');
+  assert.equal(res.error, 'ECONNRESET', 'the socket is destroyed under the client');
+
+  // The destroyed request must not take the server down with it.
+  const health = await request('GET', '/api/health');
+  assert.equal(health.status, 200, 'server survives the aborted request');
+  assert.equal(health.json().ok, true);
+});
+
 test('collect: malformed JSON yields a 400 bad-payload JSON response', async () => {
   const { port, request } = await startServer();
   const res = await rawRequest(port, 'POST', '/api/collect', '{"path": "unterminated', {
