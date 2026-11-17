@@ -122,12 +122,15 @@ function collectOnce(db, args) {
   console.log(`collect: id=${id} path=${event.path} unique=${isUnique}`);
 }
 
-function int(v, fallback) {
+// Module-private parsing helpers shared by the collect and prune subcommands.
+// Exported for direct unit coverage; importing this module is side-effect free
+// because main() only runs under the process.argv entry guard below.
+export function int(v, fallback) {
   const n = Number.parseInt(v, 10);
   return Number.isFinite(n) ? n : fallback;
 }
 
-function collectArgs(args) {
+export function collectArgs(args) {
   const opts = {};
   for (const a of args) {
     const m = a.match(/^--([a-z-]+)=(.*)$/);
@@ -136,7 +139,7 @@ function collectArgs(args) {
   return opts;
 }
 
-function pattern(args, re) {
+export function pattern(args, re) {
   for (const a of args) {
     const m = a.match(re);
     if (m) return m[1];
