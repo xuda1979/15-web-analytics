@@ -11,7 +11,7 @@
 // config object between calls (each test file runs in its own process, and
 // generateAudit reads config at call time), mirroring collector.test.js.
 
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -240,12 +240,13 @@ test('read failures: an excluded snippet still yields a full 7-check report', ()
 });
 
 test('read failures: a public dir that is a file yields "could not be measured", not a panic', () => {
-  // snippetBytes() (audit.js 16-22) guards the stat with a catch. existsSync
-  // swallows ENOTDIR, but statSync on `<file>/wa.js` (a WA_PUBLIC_DIR that
-  // points at a regular file — the misconfiguration the catch was written for)
-  // throws ENOTDIR, and the branch resolves to null: the report must flip
-  // snippet_size to fail without collapsing the other 6 checks and without
-  // raising.
+  // snippetBytes() (audit.js 18-25) resolves null for a WA_PUBLIC_DIR that
+  // points at a regular file: existsSync swallows the ENOTDIR from probing
+  // `<file>/wa.js` (Node's existsSync converts lstat errors into a false
+  // result) and the ternary short-circuits, so the size gate reports "could
+  // not be measured" instead of panicking. The statSync-throw path through the
+  // catch itself is pinned separately below — no real file state can both pass
+  // existsSync and then throw, so that branch is reached only by mocking.
   const { db } = fresh();
   const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-nosnipacc-'));
   const fileDir = path.join(parentDir, 'public');
@@ -260,6 +261,41 @@ test('read failures: a public dir that is a file yields "could not be measured",
     assert.equal(report.warn_count, 0);
   } finally {
     fs.rmSync(parentDir, { recursive: true, force: true });
+  }
+  db.close();
+});
+
+test('read failures: a statSync throw between existsSync and size resolves "could not be measured"', () => {
+  // snippetBytes() (audit.js 18-25) guards the stat with a catch, but no real
+  // file state can exercise it: existsSync swallows every lstat error (EACCES,
+  // ENOTDIR, dangling-symlink ENOENT) into a false result, so the friendly
+  // `f = existsSync ? statSync : null` ternary never lets a filesystem error
+  // reach the stat. The only way through the catch is an FS race — the file
+  // vanishes (or its perms flip) between the existsSync probe and the stat. A
+  // mocked statSync that throws reproduces that race deterministically: the
+  // catch must resolve null, flip snippet_size to fail, and leave the other
+  // six checks standing.
+  const { db } = fresh();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-nostat-'));
+  try {
+    // The snippet must exist on disk (existsSync passes) so the only failure
+    // point left is the stat call:
+    fs.writeFileSync(path.join(dir, 'wa.js'), 'console.log(1)');
+    mock.method(fs, 'statSync', () => {
+      throw new Error('simulated ENOENT between probe and stat');
+    });
+    assert.throws(() => fs.statSync(path.join(dir, 'wa.js')), 'mock is live before the report runs');
+
+    const report = withCfg({ publicDir: dir }, () => generateAudit(db));
+    const byId = Object.fromEntries(report.checks.map((c) => [c.id, c]));
+    assert.equal(byId.snippet_size.status, 'fail', 'the stat throw surfaces as a failed size gate');
+    assert.match(byId.snippet_size.detail, /could not be measured/, 'the catch reports the unmeasurable state');
+    assert.equal(report.checks.length, 7, 'the stat failure must not collapse the report');
+    assert.equal(report.pass_count, 6, 'only snippet_size fails');
+    assert.equal(report.warn_count, 0);
+  } finally {
+    mock.restoreAll();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
   db.close();
 });
