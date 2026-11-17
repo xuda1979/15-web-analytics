@@ -211,3 +211,35 @@ test('data_retention passes with fresh events and surfaces meta.last_prune', () 
   assert.match(check.detail, /last automated prune: 2026-11-10/);
   assert.equal(report.config.last_prune, LAST_PRUNE, 'last_prune echoed verbatim');
 });
+
+test('stats: a database larger than 1 MiB renders bytes_readable in MB', () => {
+  const { db } = fresh();
+  // A live database past 1 MiB is normal production posture; dbstat sums every
+  // page allocated by the file, so one oversized ua cell crosses the 1 MiB
+  // threshold without touching a single report contract. fmtBytes (audit.js)
+  // branches at 1 MiB, and no report path had ever fed it a value that large.
+  db.prepare(
+    `INSERT INTO events (ts, visited_at, guest_key, ua, path, is_bot)
+     VALUES (?,?,?,?,?,0)`,
+  ).run(T, new Date(T).toISOString(), 'g-big', 'x'.repeat(1_100_000), '/big');
+
+  const report = generateAudit(db);
+  db.close();
+
+  assert.ok(report.stats.bytes > 1024 ** 2, `dbstat crosses 1 MiB, got ${report.stats.bytes} bytes`);
+  assert.equal(
+    report.stats.bytes_readable,
+    `${(report.stats.bytes / 1024 ** 2).toFixed(1)} MB`,
+    'fmtBytes renders the MB branch',
+  );
+  assert.match(report.stats.bytes_readable, / MB$/, 'unit is MB, not KB');
+
+  // The oversized row must not disturb the clean-posture report.
+  const byId = Object.fromEntries(report.checks.map((c) => [c.id, c]));
+  assert.equal(report.checks.length, 7);
+  assert.equal(report.stats.events, 1);
+  assert.equal(report.stats.real_events, 1);
+  assert.equal(report.stats.guests, 1);
+  assert.equal(byId.no_personal_fields.status, 'pass');
+  assert.equal(report.pass_count, 7);
+});
