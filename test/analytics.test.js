@@ -7,7 +7,9 @@
 // raw-event scans, the zero-filled hourly/daily/weekly/monthly axes, realtime
 // window clamping, visit bounce/duration math, new-vs-returning split, and the
 // CSV escaping rules. Bots are excluded from every read path and that shows up
-// in the numbers, not just in the WHERE clauses.
+// in the numbers, not just in the WHERE clauses. The empty-range fallbacks are
+// pinned too: no events (or only bots) in range yields an empty browser
+// breakdown and a zeroed new/returning split rather than a fabricated value.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,6 +30,7 @@ import {
   topDevices,
   topModels,
   topBrowsers,
+  topBrowsersFiltered,
   topCountries,
   topOses,
   topLanguages,
@@ -191,6 +194,26 @@ test('topBrowsers attaches the dominant version, lexicographic tie-break, null w
   assert.equal(byName.Safari.visits, 2);
 });
 
+test('topBrowsers returns empty on an empty range, and only-bot ranges feed nothing', () => {
+  // attachBrowserVersions (analytics.js:160) early-returns the empty row set
+  // before even opening its version query: a range with no events — or with
+  // only bot rows, which topQuery always filters out — must yield [] (the
+  // dashboard renders "no data", version attachment never runs).
+  const { db, insert } = fresh();
+  assert.deepEqual(topBrowsers(db, T, T + SPAN), [], 'no events in range: empty breakdown');
+  assert.deepEqual(topBrowsers(db, T - 24 * HOUR, T - 1, 10), [], 'a range before any rows');
+  insert({ guest_key: 'g1', ts: T, path: '/bot', is_bot: 1, browser: 'Googlebot' });
+  assert.deepEqual(topBrowsers(db, T, T + SPAN), [], 'bot-only range feeds nothing to the version attach');
+
+  // The filtered variant shares the same early return: a filter matching no
+  // non-bot events produces [], not a placeholder row.
+  assert.deepEqual(
+    topBrowsersFiltered(db, T, T + SPAN, 10, { sql: 'path = ?', args: ['/missing'] }),
+    [],
+  );
+  db.close();
+});
+
 test('filtered top lists honor the page filter', () => {
   const { db, insert } = fresh();
   insert({ guest_key: 'g1', ts: T, path: '/paid', ref_domain: null });
@@ -314,6 +337,31 @@ test('returningStats splits active guests by global first presence before the ra
     returning_guests: 1,
     returning_pct: 100,
   });
+});
+
+test('returningStats zeroes the split when no guests are active in range', () => {
+  // normalizeReturningStats (analytics.js:727) guards the percentage with a
+  // falsy-guests branch: a range with no active non-bot guests must yield a
+  // zeroed split (returning_pct 0), not a fabricated division. The `active`
+  // CTE does the constraining — history before the range or bot rows doesn't
+  // materialize a guest.
+  const { db, insert } = fresh();
+  const zero = { guests: 0, new_guests: 0, returning_guests: 0, returning_pct: 0 };
+
+  assert.deepEqual(returningStats(db, T, T + SPAN), zero, 'no events in range: zeroed split');
+
+  insert({ guest_key: 'gOld', ts: T - 24 * HOUR, path: '/pre' });
+  assert.deepEqual(returningStats(db, T, T + SPAN), zero, 'out-of-range history is not an active guest');
+
+  insert({ guest_key: 'gBot', ts: T, path: '/bot', is_bot: 1 });
+  assert.deepEqual(returningStats(db, T, T + SPAN), zero, 'bot-only range: zeroed split');
+
+  assert.deepEqual(
+    returningStatsFiltered(db, T, T + SPAN, { sql: 'path = ?', args: ['/missing'] }),
+    zero,
+    'a filter matching nothing yields the same zeroed split',
+  );
+  db.close();
 });
 
 test('filtered daily/weekly/monthly series zero-fill their axes and honor the filter', () => {
