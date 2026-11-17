@@ -11,7 +11,10 @@ import { SCHEMA } from './schema.js';
 const SNIPPET_BUDGET_BYTES = 1024;
 
 // Actual byte size of the served collector snippet, or null when the file is
-// absent (so a future refactor can't silently desync report and reality).
+// absent (so a future refactor can't silently desync report and reality). The
+// catch also keeps an unstatable snippet (e.g. a WA_PUBLIC_DIR that does not
+// resolve, or a filesystem error between existsSync and statSync) from
+// panicking the whole report: the size gate reports the failure instead.
 function snippetBytes() {
   try {
     const f = path.join(config.publicDir, 'wa.js');

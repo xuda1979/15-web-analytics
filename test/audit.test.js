@@ -239,6 +239,31 @@ test('read failures: an excluded snippet still yields a full 7-check report', ()
   db.close();
 });
 
+test('read failures: a public dir that is a file yields "could not be measured", not a panic', () => {
+  // snippetBytes() (audit.js 16-22) guards the stat with a catch. existsSync
+  // swallows ENOTDIR, but statSync on `<file>/wa.js` (a WA_PUBLIC_DIR that
+  // points at a regular file — the misconfiguration the catch was written for)
+  // throws ENOTDIR, and the branch resolves to null: the report must flip
+  // snippet_size to fail without collapsing the other 6 checks and without
+  // raising.
+  const { db } = fresh();
+  const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-nosnipacc-'));
+  const fileDir = path.join(parentDir, 'public');
+  fs.writeFileSync(fileDir, 'not a directory');
+  try {
+    const report = withCfg({ publicDir: fileDir }, () => generateAudit(db));
+    const byId = Object.fromEntries(report.checks.map((c) => [c.id, c]));
+    assert.equal(byId.snippet_size.status, 'fail', 'unmeasurable snippet still fails the gate');
+    assert.match(byId.snippet_size.detail, /could not be measured/, 'fallback names the unmeasurable state');
+    assert.equal(report.checks.length, 7, 'the bad public dir must not collapse the report');
+    assert.equal(report.pass_count, 6, 'only snippet_size fails');
+    assert.equal(report.warn_count, 0);
+  } finally {
+    fs.rmSync(parentDir, { recursive: true, force: true });
+  }
+  db.close();
+});
+
 test('read failures: an unreadable src module is excluded from both scanners', () => {
   // outboundEvidence() and regionEvidence() both guard their per-file
   // readFileSync with a catch-and-continue. Make one src module unreadable at
