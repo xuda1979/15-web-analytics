@@ -449,6 +449,71 @@ test('returningStats zeroes the split when no guests are active in range', () =>
   db.close();
 });
 
+test('returningStats read cost is bounded by the queried window, not all-time history', () => {
+  // The guest_first CTE must scope to the window's active guests instead of
+  // scanning the whole events table: pre-fix every /api/overview (and summary
+  // export) grouped the ENTIRE history by guest (EXPLAIN: `MATERIALIZE
+  // guest_first` → `SCAN events USING INDEX idx_events_guest`), so read cost
+  // grew linearly with the archive while the queried window stayed fixed —
+  // measured 273ms at 1M history rows vs ~20ms for a 10k-row DB (13.9x for
+  // history the query never even surfaces). Post-fix the CTE is confined via
+  // `guest_key IN (SELECT guest_key FROM active)`, giving a per-active-guest
+  // equality lookup (`SEARCH ... idx_events_guest (guest_key=?)`) that is
+  // O(window), not O(history). This test seeds a large all-time archive of
+  // guests that never appear in the window and asserts the split still comes
+  // back in window-bound time — on the reference machine pre-fix was ~220ms
+  // here (over the 100ms bound), post-fix is ~2ms.
+  const { db, insert } = fresh();
+  const stmt = db.prepare(
+    `INSERT INTO events
+      (ts, visited_at, guest_key, ua, path, referrer, ref_domain,
+       title, screen_w, screen_h, lang, country, browser, browser_version,
+       device, device_model, os, is_bot, visit_key, entry_path, exit_path)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  );
+  const base = T - 730 * 24 * HOUR;
+  db.exec('BEGIN');
+  for (let n = 0; n < 800_000; n++) {
+    const ts = base + (n % (720 * 24 * HOUR)); // spread over ~2 years, all OUTSIDE the window
+    const gk = `hist-${n % 200_000}`;
+    stmt.run(ts, new Date(ts).toISOString(), gk, 'Raw/1.0', '/hist',
+      null, null, null, 1920, 1080, null, null, 'Raw', null, 'desktop', null, null,
+      0, ts, '/hist', '/hist');
+  }
+  const inWin = T - 24 * HOUR - 1; // ensure the archive stops before the window
+  stmt.run(inWin, new Date(inWin).toISOString(), 'hist-last', 'Raw/1.0', '/hist',
+    null, null, null, 1920, 1080, null, null, 'Raw', null, 'desktop', null, null,
+    0, inWin, '/hist', '/hist');
+  db.exec('COMMIT');
+
+  insert({ guest_key: 'gA', ts: T - 24 * HOUR, path: '/pre' }); // returning: first seen before the window
+  insert({ guest_key: 'gA', ts: T, path: '/ret' });
+  insert({ guest_key: 'gB', ts: T, path: '/new' });
+
+  const expected = { guests: 2, new_guests: 1, returning_guests: 1, returning_pct: 50 };
+  const t0 = performance.now();
+  assert.deepEqual(returningStats(db, T, T + SPAN), expected);
+  const elapsed = performance.now() - t0;
+  assert.ok(
+    elapsed < 100,
+    `returningStats must stay window-bounded: took ${elapsed.toFixed(1)}ms with 800k out-of-window history rows (pre-fix ~220ms)`,
+  );
+
+  const tf = performance.now();
+  assert.deepEqual(returningStatsFiltered(db, T, T + SPAN, { sql: 'path = ?', args: ['/ret'] }), {
+    guests: 1,
+    new_guests: 0,
+    returning_guests: 1,
+    returning_pct: 100,
+  });
+  const elapsedF = performance.now() - tf;
+  assert.ok(
+    elapsedF < 100,
+    `returningStatsFiltered must stay window-bounded: took ${elapsedF.toFixed(1)}ms with 800k out-of-window history rows`,
+  );
+  db.close();
+});
+
 test('filtered daily/weekly/monthly series zero-fill their axes and honor the filter', () => {
   const { db, insert } = fresh();
   const fq = { sql: 'path = ?', args: ['/only'] };

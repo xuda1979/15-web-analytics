@@ -677,14 +677,15 @@ export function returningStats(db, startMs, endMs) {
   const w = whereClause(startMs, endMs);
   const row = db
     .prepare(
-      `WITH guest_first AS (
-          SELECT guest_key, MIN(ts) AS first_ts FROM events
-          WHERE is_bot = 0 AND guest_key IS NOT NULL
-          GROUP BY guest_key
-       ),
-       active AS (
+      `WITH active AS (
           SELECT DISTINCT guest_key FROM events
           WHERE ${w.sql} AND is_bot = 0 AND guest_key IS NOT NULL
+       ),
+       guest_first AS (
+          SELECT guest_key, MIN(ts) AS first_ts FROM events
+          WHERE is_bot = 0 AND guest_key IS NOT NULL
+            AND guest_key IN (SELECT guest_key FROM active)
+          GROUP BY guest_key
        )
        SELECT COUNT(*) AS guests,
               SUM(CASE WHEN gf.first_ts < ? THEN 1 ELSE 0 END) AS returning_guests,
@@ -698,15 +699,16 @@ export function returningStats(db, startMs, endMs) {
 export function returningStatsFiltered(db, startMs, endMs, fq) {
   const row = db
     .prepare(
-      `WITH guest_first AS (
-          SELECT guest_key, MIN(ts) AS first_ts FROM events
-          WHERE is_bot = 0 AND guest_key IS NOT NULL
-          GROUP BY guest_key
-       ),
-       active AS (
+      `WITH active AS (
           SELECT DISTINCT guest_key FROM events
           WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND guest_key IS NOT NULL
             AND ${fq.sql}
+       ),
+       guest_first AS (
+          SELECT guest_key, MIN(ts) AS first_ts FROM events
+          WHERE is_bot = 0 AND guest_key IS NOT NULL
+            AND guest_key IN (SELECT guest_key FROM active)
+          GROUP BY guest_key
        )
        SELECT COUNT(*) AS guests,
               SUM(CASE WHEN gf.first_ts < ? THEN 1 ELSE 0 END) AS returning_guests,
