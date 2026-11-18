@@ -561,6 +561,85 @@ test('export: the raw stream yields to the event loop, stays byte-identical, and
   assert.equal(alive.status, 204, 'the server keeps serving after a mid-stream client abort');
 });
 
+test('export: a stalled client caps the server-side buffer (backpressure parks the scan)', async () => {
+  const { port, request, db } = await startServer();
+
+  // ~100k fresh rows 90 days back, under a prefix no sibling test uses, so the
+  // window stays out of every other test's relative range. The serialized body
+  // (~22 MiB) dwarfs the kernel socket buffers, so halting the reader mid-body
+  // makes the peer's receive window close and res.write() start returning
+  // false while rows keep streaming. The drain-parking loop must then hold
+  // only the in-flight chunk (~16 KiB) instead of letting Node buffer the
+  // remaining export in memory — an unbounded-memory availability defect.
+  const N = 100000;
+  const base = Date.now() - 90 * 86_400_000;
+  const ins = db.prepare(
+    `INSERT INTO events (ts, visited_at, guest_key, ua, path, referrer, title, screen_w, screen_h, lang)
+     VALUES (?, ?, ?, 'UA-Bp', ?, '', 't', 1920, 1080, 'en')`,
+  );
+  for (let n = 1; n <= N; n++) {
+    const ts = base + n * 1000;
+    ins.run(ts, new Date(ts).toISOString().replace(/\.\d{3}Z$/, ''), `g${n % 50}`, `/bp/${n}`);
+  }
+  const url = `/api/export?from=${base - 1}&to=${base + N * 1000 + 1}`;
+
+  // A request that can pause mid-body: read the first megabyte, then stop
+  // reading entirely so the server-side socket fills. `stalled` resolves once
+  // the pause is in effect; `done` resolves only when the header scan ends
+  // (i.e. after the client resumes and the response fully drains).
+  const res = await new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: url }, (r) => resolve(r));
+    req.on('error', reject);
+    req.end();
+  });
+  let settleDone;
+  const done = new Promise((resolve) => (settleDone = resolve));
+  let stalledResolve;
+  const stalled = new Promise((resolve) => (stalledResolve = resolve));
+  let received = 0;
+  let paused = false;
+  res.on('data', (c) => {
+    received += c.length;
+    if (!paused && received >= 1024 * 1024) {
+      paused = true;
+      res.pause();
+      stalledResolve();
+    }
+  });
+  res.on('end', () => settleDone({ status: res.statusCode, ok: true }));
+  res.on('error', () => settleDone({ status: res.statusCode, ok: false }));
+  await stalled;
+
+  let growth = 0;
+  try {
+    // (1) RSS must stop growing while the client stalls. Pre-fix this grew by
+    // ~18 MiB (the whole remainder of the export was buffered); with the
+    // drain-parking loop it stays near the in-flight chunk plus client-side
+    // socket backlog. Assert a wide band far above post-fix noise yet far
+    // below the full unfetched body.
+    const before = process.memoryUsage().rss;
+    await sleep(1500);
+    const after = process.memoryUsage().rss;
+    growth = (after - before) / 1048576;
+    assert.ok(growth < 6, `RSS grows by <6 MiB while a stalled client halts the export (grew ${growth.toFixed(1)} MiB)`);
+
+    // (2) The parked handler must not hold the request loop hostage.
+    const health = await request('GET', '/api/health');
+    assert.equal(health.status, 200, 'health still answers while the export loop is parked');
+  } finally {
+    // Always drain the connection so later tests see a clean, completed socket.
+    res.resume();
+  }
+
+  // (3) Resuming the reader drains the response: the park releases on 'drain',
+  // the scan finishes, and the client sees a complete 200.
+  const out = await Promise.race([
+    done,
+    sleep(15000).then(() => ({ status: null, ok: false, timeout: true })),
+  ]);
+  assert.equal(out.status, 200, 'the export completes once the stalled client reads again');
+});
+
 // MUST stay the last test in this file: it deliberately breaks the shared
 // in-process DB so every database-backed route throws, and after() then shuts
 // the server down. No later test may rely on this server's DB.
