@@ -333,10 +333,11 @@ export function realtime(db, now = Date.now()) {
     )
     .all(start, now);
   if (!rows.length) {
-    return { buckets: [], current: { visits: 0, uniques: 0 } };
+    return { buckets: [], current: { visits: 0, uniques: 0 }, window_ms: config.realtimeWindowMs };
   }
   const current = rows[rows.length - 1];
   return {
+    window_ms: config.realtimeWindowMs,
     buckets: rows.map((r) => ({
       ts: Number(r.bucket1m),
       visits: Number(r.visits),
@@ -364,10 +365,11 @@ export function realtimeFiltered(db, fq, now = Date.now()) {
     )
     .all(start, now, ...fq.args);
   if (!rows.length) {
-    return { buckets: [], current: { visits: 0, uniques: 0 } };
+    return { buckets: [], current: { visits: 0, uniques: 0 }, window_ms: config.realtimeWindowMs };
   }
   const current = rows[rows.length - 1];
   return {
+    window_ms: config.realtimeWindowMs,
     buckets: rows.map((r) => ({
       ts: Number(r.bucket1m),
       visits: Number(r.visits),

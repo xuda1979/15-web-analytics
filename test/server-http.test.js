@@ -501,7 +501,8 @@ test('realtime: the endpoint narrows its bucket scope to an active filter', asyn
 
   // A filter matching nothing returns the zeroed empty form, not an error.
   const none = await request('GET', '/api/realtime?page=%2Ffrt%2Fnope');
-  assert.deepEqual(none.json(), { buckets: [], current: { visits: 0, uniques: 0 } });
+  assert.deepEqual(none.json(),
+    { buckets: [], current: { visits: 0, uniques: 0 }, window_ms: 300000 });
 });
 
 test('realtime: the unfiltered CSV summary contrasts by counting every row', async () => {

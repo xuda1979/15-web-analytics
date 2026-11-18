@@ -352,6 +352,7 @@ test('realtime returns in-window minute buckets and clamps the window at both en
 
   const rt = realtime(db, now);
   assert.deepEqual(rt, {
+    window_ms: config.realtimeWindowMs,
     buckets: [
       { ts: T + 3 * MIN, visits: 1, uniques: 1 },
       // uniques count visit STARTS per minute bucket: g1's continuation into
@@ -364,7 +365,8 @@ test('realtime returns in-window minute buckets and clamps the window at both en
 
 test('realtime on an empty DB returns the zeroed empty form', () => {
   const { db } = fresh();
-  assert.deepEqual(realtime(db, T + MIN), { buckets: [], current: { visits: 0, uniques: 0 } });
+  assert.deepEqual(realtime(db, T + MIN),
+    { buckets: [], current: { visits: 0, uniques: 0 }, window_ms: config.realtimeWindowMs });
 });
 
 test('realtime read cost does not grow with the archive age of agg_daily_realtime', () => {
@@ -415,6 +417,7 @@ test('realtime read cost does not grow with the archive age of agg_daily_realtim
   assert.deepEqual(
     rt,
     {
+      window_ms: config.realtimeWindowMs,
       buckets: [
         { ts: T + 3 * MIN, visits: 1, uniques: 1 },
         { ts: T + 4 * MIN, visits: 1, uniques: 1 },
@@ -455,6 +458,7 @@ test('realtimeFiltered aggregates raw events by minute bucket honoring the filte
 
   const rt = realtimeFiltered(db, fq, now);
   assert.deepEqual(rt, {
+    window_ms: config.realtimeWindowMs,
     buckets: [
       { ts: T + 3 * MIN, visits: 1, uniques: 1 },
       // g1's continuation + g4's visit in the same minute: 2 visits, 2 distinct
@@ -476,6 +480,7 @@ test('realtimeFiltered honors source and device predicates and the window clamp'
   const fq = { sql: 'ref_domain = ? AND device = ?', args: ['google.com', 'mobile'] };
   const rt = realtimeFiltered(db, fq, now);
   assert.deepEqual(rt, {
+    window_ms: config.realtimeWindowMs,
     buckets: [{ ts: T + 3 * MIN, visits: 1, uniques: 1 }],
     current: { visits: 1, uniques: 1 },
   }, 'out-of-window rows are clamped out, compound predicates narrow correctly');
@@ -484,7 +489,8 @@ test('realtimeFiltered honors source and device predicates and the window clamp'
 test('realtimeFiltered on an empty DB returns the zeroed empty form', () => {
   const { db } = fresh();
   const fq = { sql: 'path = ?', args: ['/nope'] };
-  assert.deepEqual(realtimeFiltered(db, fq, T + MIN), { buckets: [], current: { visits: 0, uniques: 0 } });
+  assert.deepEqual(realtimeFiltered(db, fq, T + MIN),
+    { buckets: [], current: { visits: 0, uniques: 0 }, window_ms: config.realtimeWindowMs });
 });
 
 test('totals counts a range inclusive of end and never counts bots', () => {

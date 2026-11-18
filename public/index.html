@@ -35,7 +35,7 @@
   <div class="kpis">
     <div class="kpi"><div class="n" id="kVisits">–</div><div class="l">Pageviews</div></div>
     <div class="kpi"><div class="n" id="kUniques">–</div><div class="l">Unique visitors</div></div>
-    <div class="kpi"><div class="n" id="kNowV">–</div><div class="l">Right now (5m)</div></div>
+    <div class="kpi"><div class="n" id="kNowV">–</div><div class="l" id="kNowL">Right now (5m)</div></div>
     <div class="kpi"><div class="n" id="kSessions">–</div><div class="l">Sessions</div></div>
     <div class="kpi"><div class="n" id="kBounce">–</div><div class="l">Bounce rate</div></div>
     <div class="kpi"><div class="n" id="kDur">–</div><div class="l">Avg visit</div></div>
@@ -141,6 +141,15 @@
     if (m < 60) return m + 'm' + (r ? ' ' + r + 's' : '');
     var h = Math.floor(m / 60);
     return h + 'h ' + (m % 60) + 'm';
+  }
+  // Compact window readout for the realtime labels: 5m for 300_000ms, 1m for
+  // 60_000ms, 10m for 600_000ms. Falls back to "5m" for a missing/garbled
+  // window so the badge never shows an empty paren.
+  function windowLabel(ms) {
+    ms = Number(ms);
+    if (!(ms > 0)) return '5m';
+    var m = Math.round(ms / 60000);
+    return (m >= 60 ? Math.floor(m / 60) + 'h' + (m % 60 ? ' ' + (m % 60) + 'm' : '') : m + 'm');
   }
   // Format a UTC epoch as YYYY-MM-DD for the range readout.
   function dayLabel(ms) {
@@ -376,8 +385,10 @@
       .then(function (r) { return r.json(); })
       .then(function (d) {
         var cur = d.current || { visits: 0, uniques: 0 };
+        var win = windowLabel(d.window_ms);
         el('kNowV').textContent = cur.visits;
-        el('rtLabel').textContent = 'realtime ' + cur.visits + ' pv / ' + cur.uniques + ' uniq (5m)';
+        el('kNowL').textContent = 'Right now (' + win + ')';
+        el('rtLabel').textContent = 'realtime ' + cur.visits + ' pv / ' + cur.uniques + ' uniq (' + win + ')';
         drawSpark(d.buckets);
       })
       .catch(function () {});
