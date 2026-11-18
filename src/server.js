@@ -82,6 +82,18 @@ const mime = {
   '.json': 'application/json',
 };
 
+// Parse a bound as either epoch milliseconds (a bare integer string) or any
+// Date.parse()-able format. Unparseable values return NaN so callers can
+// silently ignore them.
+function parseBound(value) {
+  if (typeof value === 'string' && /^\d{1,15}$/.test(value.trim())) {
+    const ms = Number(value.trim());
+    // Bounds beyond the year 33658 overflow Date; treat as NaN like Date.parse.
+    return Number.isSafeInteger(ms) && Math.abs(ms) <= Date.now() + 8.64e12 ? ms : NaN;
+  }
+  return Date.parse(value);
+}
+
 function parseRange(query, defaultDays = 30) {
   // `query` is a URLSearchParams (only .get() works, not property access).
   const now = Date.now();
@@ -91,13 +103,13 @@ function parseRange(query, defaultDays = 30) {
   let end = now;
   const toParam = query.get('to');
   if (toParam) {
-    const t = Date.parse(toParam);
+    const t = parseBound(toParam);
     if (Number.isFinite(t)) end = t;
   }
   let start = end - days * 24 * 3600 * 1000;
   const fromParam = query.get('from');
   if (fromParam) {
-    const f = Date.parse(fromParam);
+    const f = parseBound(fromParam);
     if (Number.isFinite(f)) start = f;
   }
   return { start, end };

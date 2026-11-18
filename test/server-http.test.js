@@ -204,6 +204,21 @@ test('overview range: invalid from/to bounds are ignored, not applied', async ()
   assert.equal(body.range.end - body.range.start, 3 * 86_400_000, 'window is exactly the requested days');
 });
 
+test('overview range: bare epoch-ms from/to bounds are honored exactly', async () => {
+  const { request } = await startServer();
+
+  // The API stores ts as epoch milliseconds, so callers passing the native
+  // representation as a bare integer get the exact window, not a silent
+  // fallback to the default (Date.parse('1700000000000') is NaN).
+  const from = 1_700_000_000_000;
+  const to = from + 2 * 86_400_000 + 5000;
+  const body = await (await request('GET', `/api/overview?from=${from}&to=${to}`)).json();
+
+  assert.equal(body.range.start, from, 'numeric from is used as epoch ms');
+  assert.equal(body.range.end, to, 'numeric to is used as epoch ms');
+  assert.equal(body.range.end - body.range.start, 2 * 86_400_000 + 5000, 'window spans the numeric bounds');
+});
+
 test('collect: x-real-ip wins, xff uses its first element; guest keys follow', async () => {
   const { request, db } = await startServer();
 
@@ -485,12 +500,9 @@ test('export: the raw stream yields to the event loop, stays byte-identical, and
 
   const from = base - 1;
   const to = base + N * 1000 + 1;
-  // parseRange feeds from/to through Date.parse(), which rejects bare epoch
-  // numbers ("1700000000000" -> NaN) but parses ISO-8601 exactly, so send the
-  // numeric bounds as ISO strings to pin the window deterministically.
-  const isoFrom = new Date(from).toISOString();
-  const isoTo = new Date(to).toISOString();
-  const url = `/api/export?from=${isoFrom}&to=${isoTo}`;
+  // Bounds sent as bare epoch-ms integers: parseRange accepts them natively
+  // (the API stores ts as epoch ms), pinning the window deterministically.
+  const url = `/api/export?from=${from}&to=${to}`;
 
   // Byte-identity oracle: the streamed body must equal the one-shot
   // materialization exactly. The export iter yields {...r, visitsSerial:
