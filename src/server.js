@@ -76,6 +76,23 @@ if (fs.existsSync(dashboardPath)) {
   dashboardHtml = fs.readFileSync(dashboardPath, 'utf8');
 }
 
+// Label the hour-of-day axis card with the configured UTC offset so the
+// dashboard stays self-describing (default "UTC", else "UTC+8", "UTC-5:30", …).
+function hourAxisLabel(offsetMin) {
+  if (!offsetMin) return 'UTC';
+  const sign = offsetMin < 0 ? '-' : '+';
+  const abs = Math.abs(offsetMin);
+  const h = Math.trunc(abs / 60);
+  const m = abs % 60;
+  return m ? `UTC${sign}${h}:${String(m).padStart(2, '0')}` : `UTC${sign}${h}`;
+}
+if (dashboardHtml) {
+  dashboardHtml = dashboardHtml.replace(
+    'Activity by hour (UTC)',
+    `Activity by hour (${hourAxisLabel(config.hourOffsetMin)})`,
+  );
+}
+
 const mime = {
   '.js': 'text/javascript; charset=utf-8',
   '.html': 'text/html; charset=utf-8',

@@ -340,6 +340,50 @@ test('hourlySeries zero-fills all 24 UTC hours', () => {
   assert.equal(series.reduce((a, s) => a + s.visits, 0), 3);
 });
 
+test('hourlySeries honors config.hourOffsetMin when shifting hour buckets', () => {
+  const { db, post } = fresh();
+  const one = Date.UTC(2026, 10, 10, 1, 0); // 01:00 UTC → 09:00 at UTC+8
+
+  // The analytics module reads config.hourOffsetMin at call time, so the
+  // mutation below drives the query without restarting the server. Restored in
+  // finally so no other test inherits the shift.
+  const saved = config.hourOffsetMin;
+  config.hourOffsetMin = 480; // UTC+8, the China-market default use case
+  try {
+    post('/m', { ts: one });
+    post('/n', { ts: one + MIN });            // still local hour 09
+    post('/o', { ts: one + 2 * HOUR });       // 03:00 UTC → 11:00 local
+    post('/pre', { ts: one - 8 * MIN });      // 00:52 UTC → 08:00 local
+
+    const series = hourlySeries(db, one - 10 * MIN, one + 3 * HOUR);
+    assert.equal(series.length, 24);
+    assert.deepEqual(
+      series.filter((s) => s.visits > 0).map((s) => s),
+      [
+        { hour: 8, visits: 1, uniques: 1 },
+        { hour: 9, visits: 2, uniques: 1 },
+        { hour: 11, visits: 1, uniques: 1 },
+      ],
+      'hour buckets land in UTC+8 local hours, not UTC hours',
+    );
+
+    // The filtered variant must shift identically.
+    const fqs = { sql: '1 = 1', args: [] };
+    const filtered = hourlySeriesFiltered(db, one - 10 * MIN, one + 3 * HOUR, fqs);
+    assert.deepEqual(
+      filtered.filter((s) => s.visits > 0).map((s) => s),
+      [
+        { hour: 8, visits: 1, uniques: 1 },
+        { hour: 9, visits: 2, uniques: 1 },
+        { hour: 11, visits: 1, uniques: 1 },
+      ],
+      'hourlySeriesFiltered shifts with the same offset',
+    );
+  } finally {
+    config.hourOffsetMin = saved;
+  }
+});
+
 test('realtime returns in-window minute buckets and clamps the window at both ends', () => {
   const { db, post } = fresh();
   const now = T + 5 * MIN;

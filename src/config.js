@@ -26,6 +26,16 @@ function int(value, fallback) {
   return Number.isFinite(n) && n >= 0 && !Object.is(n, -0) ? n : fallback;
 }
 
+// The one intentional exception to int()'s negative rejection: a UTC offset
+// for the hour-of-day axis is meaningfully negative (zones west of UTC, e.g.
+// US Eastern = -300). A negative value here does not invert any time-window
+// math — it just shifts the hourly bucketing, so negatives parse instead of
+// falling back. Garbage (non-numeric) still falls back.
+function signedInt(value, fallback) {
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 const root = path.resolve(import.meta.dirname, '..');
 
 export const config = {
@@ -54,6 +64,10 @@ export const config = {
 
   // Real-time window (ms). Realtime endpoint trees events younger than this.
   realtimeWindowMs: int(process.env.WA_REALTIME_WINDOW_MS, 1000 * 60 * 5),
+
+  // Minutes ahead of UTC for the hour-of-day activity axis. 0 = UTC. Shifts
+  // the hourly bucketing so e.g. Beijing time (UTC+8) shows local hours.
+  hourOffsetMin: signedInt(process.env.WA_HOUR_OFFSET_MIN, 0),
 
   // Collect rate limiting: max POSTs per IP per window. 0 disables.
   collectRateLimit: int(process.env.WA_COLLECT_RATE_LIMIT, 60),

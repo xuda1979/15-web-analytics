@@ -19,7 +19,8 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const WA_VARS = [
   'WA_HOST', 'WA_PORT', 'WA_DATA_DIR', 'WA_DB_PATH', 'WA_VISIT_WINDOW_MS',
   'WA_HASH_SALT', 'WA_STORE_IP', 'WA_REALTIME_WINDOW_MS',
-  'WA_COLLECT_RATE_LIMIT', 'WA_COLLECT_RATE_WINDOW_MS', 'WA_RETENTION_DAYS',
+  'WA_HOUR_OFFSET_MIN', 'WA_COLLECT_RATE_LIMIT', 'WA_COLLECT_RATE_WINDOW_MS',
+  'WA_RETENTION_DAYS',
   'WA_SNIPPET_PATH', 'WA_COLLECT_PATH', 'WA_OVERVIEW_PATH',
   'WA_REALTIME_PATH', 'WA_EXPORT_PATH', 'WA_AUDIT_PATH', 'WA_PUBLIC_DIR',
 ];
@@ -42,6 +43,7 @@ test('defaults: every tunable has a documented value and paths resolve under the
   assert.equal(c.hashSalt, 'wa-local-salt');
   assert.equal(c.storeIp, false);
   assert.equal(c.realtimeWindowMs, 1_000 * 60 * 5);
+  assert.equal(c.hourOffsetMin, 0);
   assert.equal(c.collectRateLimit, 60);
   assert.equal(c.collectRateWindowMs, 60_000);
   assert.equal(c.retentionDays, 0);
@@ -113,6 +115,19 @@ test('int(): negative windows are rejected so time-window math cannot invert', a
   const { config: ok } = await loadConfig({ WA_VISIT_WINDOW_MS: '0', WA_RETENTION_DAYS: '0' });
   assert.equal(ok.visitWindowMs, 0, '0 remains a valid explicitly-configured value');
   assert.equal(ok.retentionDays, 0, '0 disabled-prune remains 0');
+});
+
+test('signedInt(): UTC offset accepts negatives (west zones) but not garbage', async () => {
+  // The hour-of-day axis offset is the one tunable where a negative value is
+  // meaningful — zones west of UTC. Garbage still falls back to 0.
+  const { config: east } = await loadConfig({ WA_HOUR_OFFSET_MIN: '480' });
+  assert.equal(east.hourOffsetMin, 480, 'UTC+8 parses to +480 minutes');
+  const { config: west } = await loadConfig({ WA_HOUR_OFFSET_MIN: '-300' });
+  assert.equal(west.hourOffsetMin, -300, 'US Eastern (UTC-5) parses to -300 minutes');
+  const { config: half } = await loadConfig({ WA_HOUR_OFFSET_MIN: '330' });
+  assert.equal(half.hourOffsetMin, 330, 'non-hour offsets like UTC+5:30 parse too');
+  const { config: junk } = await loadConfig({ WA_HOUR_OFFSET_MIN: 'abc' });
+  assert.equal(junk.hourOffsetMin, 0, 'non-numeric offset falls back to the 0/UTC default');
 });
 
 test('dbPath resolution: WA_DB_PATH wins outright, WA_DATA_DIR derives the sibling path', async () => {

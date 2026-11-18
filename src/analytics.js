@@ -236,15 +236,16 @@ export function topScreens(db, startMs, endMs, limit = 10) {
     .map((r) => ({ screen: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
 }
 
-// Activity by hour of day (UTC), zero-filled across a full 24-hour axis so a
-// sparse day still renders a complete distribution. The aggregate caches carry
-// no hour-of-day dimension, so this reads raw events (same ts-indexed scan the
-// filtered paths use).
+// Activity by hour of day, zero-filled across a full 24-hour axis so a sparse
+// day still renders a complete distribution. Hour boundaries honor the
+// configured UTC offset (config.hourOffsetMin, 0 = UTC). The aggregate caches
+// carry no hour-of-day dimension, so this reads raw events (same ts-indexed
+// scan the filtered paths use).
 export function hourlySeries(db, startMs, endMs) {
   const w = whereClause(startMs, endMs);
   const rows = db
     .prepare(
-      `SELECT CAST(strftime('%H', ts / 1000, 'unixepoch') AS INTEGER) AS hour,
+      `SELECT CAST(strftime('%H', (ts + ${config.hourOffsetMin} * 60000) / 1000, 'unixepoch') AS INTEGER) AS hour,
               COUNT(*) AS visits,
               COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
        FROM events
@@ -262,7 +263,7 @@ export function hourlySeries(db, startMs, endMs) {
 export function hourlySeriesFiltered(db, startMs, endMs, fq) {
   const rows = db
     .prepare(
-      `SELECT CAST(strftime('%H', ts / 1000, 'unixepoch') AS INTEGER) AS hour,
+      `SELECT CAST(strftime('%H', (ts + ${config.hourOffsetMin} * 60000) / 1000, 'unixepoch') AS INTEGER) AS hour,
               COUNT(*) AS visits,
               COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
        FROM events
