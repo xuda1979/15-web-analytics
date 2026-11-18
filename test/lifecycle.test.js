@@ -93,6 +93,64 @@ test('automatic retention prunes old events at startup', async () => {
   }
 });
 
+test('out-of-range WA_PORT fails cleanly with a message instead of a crash stack', async () => {
+  // WA_PORT=70000 (> 65535) makes server.listen() throw a synchronous
+  // ERR_SOCKET_BAD_PORT; without a guard the exception escapes as a raw stack
+  // trace (an operator-visible availability failure). The server must instead
+  // log one deterministic line and exit 1 — the same code, but self-describing.
+  const dir = tmpdir();
+  try {
+    const spawned = spawn(
+      process.execPath,
+      ['--disable-warning=ExperimentalWarning', 'src/server.js'],
+      { cwd: ROOT, env: { ...process.env, WA_HOST: '127.0.0.1', WA_PORT: '70000', WA_DATA_DIR: dir } },
+    );
+    let out = '';
+    let err = '';
+    spawned.stdout.on('data', (c) => (out += c));
+    spawned.stderr.on('data', (c) => (err += c));
+    const code = await new Promise((resolve) => spawned.on('exit', (c) => resolve(c)));
+    assert.equal(code, 1, 'exits non-zero without taking down anything else');
+    assert.match(err, /\[server\] cannot listen on http:\/\/127\.0\.0\.1:70000/, `expected a self-describing listen failure, stderr:\n${err}`);
+    assert.ok(!/at serverStart|ERR_SOCKET_BAD_PORT.*\n\s+at /.test(err), 'no raw crash stack on stderr');
+    // The one acceptable stderr line is the listen-failure notice; a sync throw
+    // would additionally print "node:net:2085" and the V8 stack frames.
+    assert.ok(!err.includes('node:net:'), 'stderr carries no V8-internal frames');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('EADDRINUSE exit code 1 from the async error event, with a message and no stack', async () => {
+  // A second server on a port the first process already holds fails with an
+  // async 'error' event (EADDRINUSE, e.g. a stale instance from a prior run).
+  // That path is distinct from the synchronous ERR_SOCKET_BAD_PORT throw above
+  // and must also reach the same clean one-line failure instead of Node's
+  // unhandled-'error' crash dump.
+  const dir = tmpdir();
+  let keeper;
+  try {
+    const booted = await bootServer(dir, 8842);
+    keeper = booted.proc;
+    const spawned = spawn(
+      process.execPath,
+      ['--disable-warning=ExperimentalWarning', 'src/server.js'],
+      { cwd: ROOT, env: { ...process.env, WA_HOST: '127.0.0.1', WA_PORT: '8842', WA_DATA_DIR: tmpdir() } },
+    );
+    let err = '';
+    spawned.stderr.on('data', (c) => (err += c));
+    const code = await new Promise((resolve) => spawned.on('exit', (c) => resolve(c)));
+    assert.equal(code, 1, 'bind failure exits non-zero');
+    assert.match(err, /\[server\] cannot listen on http:\/\/127\.0\.0\.1:8842/, `expected a self-describing listen failure, stderr:\n${err}`);
+    assert.match(err, /EADDRINUSE/, 'mentions the bind conflict');
+    assert.ok(!/^Unhandled 'error' event/m.test(err), 'no Node unhandled-error crash dump');
+    assert.ok(!/at Server\.\w+|node:net:\d+/.test(err), 'stderr carries no V8-internal frames');
+  } finally {
+    if (keeper) try { process.kill(keeper.pid, 'SIGTERM'); } catch {}
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('graceful SIGTERM exits and merges the WAL (no -wal/-shm left)', async () => {
   const dir = tmpdir();
   let proc;

@@ -549,12 +549,32 @@ function handleSnippet(res) {
 
 function serverStart() {
   const server = createServer();
-  server.listen(config.port, config.host, () => {
-    console.log(`15-web-analytics listening on http://${config.host}:${config.port}`);
-    console.log(`  dashboard  http://localhost:${config.port}/`);
-    console.log(`  snippet    http://localhost:${config.port}${config.snippetPath}`);
-    console.log(`  data       ${config.dbPath}`);
-  });
+  // A listen failure must never surface as an unhandled 'error' event or a raw
+  // stack trace: an out-of-range WA_PORT (e.g. 70000) makes listen() throw
+  // synchronously (ERR_SOCKET_BAD_PORT), a take-over of an already-bound port
+  // arrives as an async 'error' event (EADDRINUSE, e.g. a stale instance from
+  // a previous run), and a privileged port / bad host follow the same async
+  // path (EACCES / EADDRNOTAVAIL). Both paths are caught here and turned into
+  // one deterministic, self-describing failure: log the reason to stderr and
+  // exit 1 — the same exit code the unhandled crash produced — so the operator
+  // (or a health probe) sees why the service cannot start.
+  const listenFailed = (err) => {
+    console.error(
+      `[server] cannot listen on http://${config.host}:${config.port}: ${err.code || err.name} — ${err.message}`,
+    );
+    process.exit(1);
+  };
+  server.on('error', listenFailed);
+  try {
+    server.listen(config.port, config.host, () => {
+      console.log(`15-web-analytics listening on http://${config.host}:${config.port}`);
+      console.log(`  dashboard  http://localhost:${config.port}/`);
+      console.log(`  snippet    http://localhost:${config.port}${config.snippetPath}`);
+      console.log(`  data       ${config.dbPath}`);
+    });
+  } catch (err) {
+    listenFailed(err);
+  }
 
   // Graceful shutdown: stop accepting connections, drain in-flight requests,
   // then close the DB so no WAL frame is lost mid-flight (e.g. docker stop).
