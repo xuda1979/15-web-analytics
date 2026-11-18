@@ -1,5 +1,4 @@
 15-web-analytics V1.0
-15-web-analytics V1.0
 著作权人：许达（工作单位：中国移动研究院）
 开发完成日期：2026年11月16日
 /* ===== src/config.js ===== */
@@ -49,9 +48,9 @@ export function ensureDataDir() {
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { config } from './config.js';
+import { SCHEMA_TABLES, SCHEMA_INDEXES } from './schema.js';
   第 1 页
 15-web-analytics V1.0
-import { SCHEMA_TABLES, SCHEMA_INDEXES } from './schema.js';
 const EVENT_SQL_ADD = [
   'visit_key INTEGER',
   'entry_path TEXT',
@@ -101,9 +100,9 @@ export function monthKey(ms) {
   const d = new Date(ms);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
+export function monthStart(ms) {
   第 2 页
 15-web-analytics V1.0
-export function monthStart(ms) {
   const d = new Date(ms);
   d.setUTCDate(1);
   d.setUTCHours(0, 0, 0, 0);
@@ -153,9 +152,9 @@ CREATE TABLE IF NOT EXISTS events (
 -- upserts were pure write amplification with no read path. Entries/exits are
 -- likewise derived from raw events (entryExitPages/entryExitFiltered).
 CREATE TABLE IF NOT EXISTS agg_daily_realtime (
+  day        TEXT NOT NULL,
   第 3 页
 15-web-analytics V1.0
-  day        TEXT NOT NULL,
   bucket1m   INTEGER NOT NULL,     -- epoch ms floored to the minute
   visits     INTEGER NOT NULL DEFAULT 0,
   uniques    INTEGER NOT NULL DEFAULT 0,
@@ -205,9 +204,9 @@ export function loadOrCreateSecret(dataDir) {
       : crypto.randomBytes(32).toString('hex');
   fs.writeFileSync(secretFile, secret, { mode: 0o600 });
   return secret;
+}
   第 4 页
 15-web-analytics V1.0
-}
 export function hashGuest(ip, ua, secret) {
   return crypto
     .createHmac('sha256', secret)
@@ -257,9 +256,9 @@ export function isBot(ua) {
 /* ===== src/collector.js ===== */
 import { config } from './config.js';
 import { hashGuest } from './privacy.js';
+import { parseUa, isBot } from './ua.js';
   第 5 页
 15-web-analytics V1.0
-import { parseUa, isBot } from './ua.js';
 import { dayKey, monthKey, monthStart, weekStart } from './store.js';
 function clampInteger(v) {
   const n = Number.parseInt(v, 10);
@@ -309,9 +308,9 @@ export function insertEvent(db, event) {
     (() => {
       const prev = db
         .prepare(
+          `SELECT ts FROM events
   第 6 页
 15-web-analytics V1.0
-          `SELECT ts FROM events
             WHERE guest_key = ? AND is_bot = 0
             ORDER BY ts DESC LIMIT 1`,
         )
@@ -361,9 +360,9 @@ export function insertEvent(db, event) {
     bind(event.screen_w),
     bind(event.screen_h),
     bind(event.lang),
+    bind(event.country),
   第 7 页
 15-web-analytics V1.0
-    bind(event.country),
     event.browser,
     bind(event.browser_version),
     event.device,
@@ -413,9 +412,9 @@ export function refreshEntryExit(db, sinceMs = Date.now() - 24 * 3600 * 1000) {
   }
 }
 export function refreshEntryExitCore(db, sinceMs) {
+  const stmt = db.prepare(
   第 8 页
 15-web-analytics V1.0
-  const stmt = db.prepare(
     `SELECT id, guest_key, ts, path, visit_key FROM events
       WHERE ts >= ? AND is_bot = 0
       ORDER BY guest_key, ts`,
@@ -465,9 +464,9 @@ export function refreshEntryExitCore(db, sinceMs) {
     currentKey = r.guest_key;
     current.push(r);
   }
+  rewrite(current);
   第 9 页
 15-web-analytics V1.0
-  rewrite(current);
 }
 /* ===== src/retention.js ===== */
 import { config } from './config.js';
@@ -517,9 +516,9 @@ export function pruneEvents(db, cutoffMs) {
         ).run(monthKey(r.ts), monthStart(r.ts).getTime(), uniq);
       }
       refreshEntryExitCore(db, cutoffMs);
+      db.prepare(
   第 10 页
 15-web-analytics V1.0
-      db.prepare(
         `INSERT INTO meta(key, value) VALUES ('last_prune', ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       ).run(new Date().toISOString());
@@ -569,9 +568,9 @@ export function weeklySeries(db, startMs, endMs) {
     .prepare(
       `SELECT start, SUM(visits) AS visits, SUM(uniques) AS uniques
        FROM agg_monthly_buckets WHERE bucket='week' AND start >= ? AND start <= ?
+       GROUP BY start ORDER BY start`,
   第 11 页
 15-web-analytics V1.0
-       GROUP BY start ORDER BY start`,
     )
     .all(sm, em);
   const weeks = [];
@@ -621,9 +620,9 @@ export function monthlySeries(db, startMs, endMs) {
 function topQuery(db, groupCol, labelCol, startMs, endMs, limit) {
   const w = whereClause(startMs, endMs);
   return db
+    .prepare(
   第 12 页
 15-web-analytics V1.0
-    .prepare(
       `SELECT ${groupCol} AS label, COUNT(*) AS visits,
               COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
        FROM events
@@ -673,9 +672,9 @@ export function topModels(db, startMs, endMs, limit = 10) {
 }
 function attachBrowserVersions(db, rows, startMs, endMs, extraSql, extraArgs) {
   if (!rows.length) return rows;
+  const names = rows.map((r) => r.browser);
   第 13 页
 15-web-analytics V1.0
-  const names = rows.map((r) => r.browser);
   const where = ['ts >= ?', 'ts <= ?', 'is_bot = 0', `browser IN (${names.map(() => '?').join(',')})`];
   if (extraSql) where.push(extraSql);
   const versionRows = db
@@ -725,9 +724,9 @@ export function topLanguages(db, startMs, endMs, limit = 10) {
 }
 export function topScreens(db, startMs, endMs, limit = 10) {
   const w = whereClause(startMs, endMs);
+  return db
   第 14 页
 15-web-analytics V1.0
-  return db
     .prepare(
       `SELECT screen_w || 'x' || screen_h AS label, COUNT(*) AS visits,
               COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
@@ -777,9 +776,9 @@ export function entryExitPages(db, startMs, endMs, limit = 10) {
   const w = whereClause(startMs, endMs);
   const entries = db
     .prepare(
+      `WITH first_of_visit AS (
   第 15 页
 15-web-analytics V1.0
-      `WITH first_of_visit AS (
           SELECT path, guest_key FROM events
           WHERE ${w.sql} AND is_bot = 0 AND visit_key IS NOT NULL
             AND id = (SELECT MIN(id) FROM events e2
@@ -829,9 +828,9 @@ export function realtime(db, now = Date.now()) {
     current: { visits: Number(current.visits), uniques: Number(current.uniques) },
   };
 }
+export function totals(db, startMs, endMs) {
   第 16 页
 15-web-analytics V1.0
-export function totals(db, startMs, endMs) {
   const w = whereClause(startMs, endMs);
   const row = db
     .prepare(
@@ -881,9 +880,9 @@ export function visitStatsFiltered(db, startMs, endMs, fq) {
     )
     .get(startMs, endMs, ...fq.args);
   return normalizeVisitStats(row);
+}
   第 17 页
 15-web-analytics V1.0
-}
 function normalizeVisitStats(row) {
   const sessions = Number(row?.sessions || 0);
   const bounces = Number(row?.bounces || 0);
@@ -933,9 +932,9 @@ export function weeklySeriesFiltered(db, startMs, endMs, fq) {
        WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}
        GROUP BY wk ORDER BY wk`,
     )
+    .all(startMs, endMs, ...fq.args);
   第 18 页
 15-web-analytics V1.0
-    .all(startMs, endMs, ...fq.args);
   const sm = weekStart(startMs).getTime();
   const weeks = [];
   for (let t = sm; t <= endMs; t += 7 * 24 * 3600 * 1000) weeks.push(t);
@@ -985,9 +984,9 @@ function topQueryFiltered(db, groupCol, labelCol, startMs, endMs, limit, fq) {
        GROUP BY ${groupCol} ORDER BY visits DESC LIMIT ?`,
     )
     .all(startMs, endMs, ...fq.args, limit)
+    .map((r) => ({
   第 19 页
 15-web-analytics V1.0
-    .map((r) => ({
       [labelCol]: r.label,
       visits: Number(r.visits),
       uniques: Number(r.uniques),
@@ -1037,9 +1036,9 @@ export function topOsesFiltered(db, startMs, endMs, limit, fq) {
 }
 export function topLanguagesFiltered(db, startMs, endMs, limit, fq) {
   return db
+    .prepare(
   第 20 页
 15-web-analytics V1.0
-    .prepare(
       `SELECT lang AS label, COUNT(*) AS visits,
               COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
        FROM events
@@ -1089,9 +1088,9 @@ export function topTitlesFiltered(db, startMs, endMs, limit, fq) {
     .all(startMs, endMs, ...fq.args, limit)
     .map((r) => ({ title: r.label, visits: Number(r.visits), uniques: Number(r.uniques) }));
 }
+export function topReferrers(db, startMs, endMs, limit = 10) {
   第 21 页
 15-web-analytics V1.0
-export function topReferrers(db, startMs, endMs, limit = 10) {
   const w = whereClause(startMs, endMs);
   return db
     .prepare(
@@ -1141,9 +1140,9 @@ export function returningStats(db, startMs, endMs) {
 }
 export function returningStatsFiltered(db, startMs, endMs, fq) {
   const row = db
+    .prepare(
   第 22 页
 15-web-analytics V1.0
-    .prepare(
       `WITH active AS (
           SELECT DISTINCT guest_key FROM events
           WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND guest_key IS NOT NULL
@@ -1193,9 +1192,9 @@ export function entryExitFiltered(db, startMs, endMs, limit, fq) {
             GROUP BY e.visit_key
          )
          SELECT e.path, COUNT(*) AS visits, COUNT(DISTINCT e.guest_key) AS uniques
+         FROM edge JOIN events e ON e.id = eid
   第 23 页
 15-web-analytics V1.0
-         FROM edge JOIN events e ON e.id = eid
          GROUP BY e.path ORDER BY visits DESC LIMIT ?`,
       )
       .all(...args, startMs, endMs, limit)
@@ -1245,9 +1244,9 @@ import {
   monthlySeriesFiltered,
   topPagesFiltered,
   topSourcesFiltered,
+  topDevicesFiltered,
   第 24 页
 15-web-analytics V1.0
-  topDevicesFiltered,
   topModelsFiltered,
   topBrowsersFiltered,
   topCountriesFiltered,
@@ -1297,9 +1296,9 @@ export function* exportEventsIter(db, startMs, endMs, fq) {
       visitsSerial: Number(r.visitsSerial || r.id),
       ip: r.ip ? anonymizeIp(r.ip) : null,
     };
+  }
   第 25 页
 15-web-analytics V1.0
-  }
 }
 export function exportEvents(db, startMs, endMs, format = 'json', fq) {
   const rows = [...exportEventsIter(db, startMs, endMs, fq)];
@@ -1349,9 +1348,9 @@ export function exportSummary(db, startMs, endMs, format = 'json', fq) {
 }
 /* ===== src/ratelimit.js ===== */
 export class RateLimiter {
+  constructor({ windowMs = 60_000, limit = 60, maxEntries = 10_000 } = {}) {
   第 26 页
 15-web-analytics V1.0
-  constructor({ windowMs = 60_000, limit = 60, maxEntries = 10_000 } = {}) {
     this.windowMs = windowMs;
     this.limit = limit;
     this.maxEntries = maxEntries;
@@ -1401,9 +1400,9 @@ function snippetBytes() {
   } catch {
     return null;
   }
+}
   第 27 页
 15-web-analytics V1.0
-}
 export function snippetSizeCheck(byteCount, publicDir) {
   if (byteCount === null) {
     return {
@@ -1453,9 +1452,9 @@ export function retentionCheck(retentionDays, lastPrune, oldestEventMs, nowMs, o
       };
     }
     return {
+      status: 'pass',
   第 28 页
 15-web-analytics V1.0
-      status: 'pass',
       detail: `Automatic pruning is disabled (WA_RETENTION_DAYS=0) — a deliberate manual-prune posture. The oldest retained event dates to ${fmtDay(oldestEventMs)}; prune manually with npm run prune when it exceeds your retention needs.`,
     };
   }
@@ -1505,9 +1504,9 @@ function cookieEvidence() {
     let text;
     try {
       text = fs.readFileSync(t.file, 'utf8');
+    } catch {
   第 29 页
 15-web-analytics V1.0
-    } catch {
       continue;
     }
     files += 1;
@@ -1557,9 +1556,9 @@ function regionEvidence(dir = import.meta.dirname) {
       continue;
     }
     files += 1;
+    const fileLines = text.split('\n');
   第 30 页
 15-web-analytics V1.0
-    const fileLines = text.split('\n');
     lines += fileLines.length;
     const pattern =
       /geoip|geolite|maxmind|ip2location|ip-api|ipinfo|ipwhois|latitude|longitude/i;
@@ -1609,9 +1608,9 @@ export function generateAudit(db, opts = {}) {
   let dbBytes = 0;
   try {
     dbBytes = Number(
+      db.prepare(`SELECT COALESCE(SUM(pgsize), 0) AS bytes FROM dbstat`).get().bytes,
   第 31 页
 15-web-analytics V1.0
-      db.prepare(`SELECT COALESCE(SUM(pgsize), 0) AS bytes FROM dbstat`).get().bytes,
     );
   } catch {
     dbBytes = 0;
@@ -1661,9 +1660,9 @@ export function generateAudit(db, opts = {}) {
       status: outbound.hits.length ? 'fail' : 'pass',
       detail: outbound.hits.length
         ? `Outbound-transmission primitive${outbound.hits.length > 1 ? 's' : ''} found in server source: ${outbound.hits.join('; ')}. A self-hosted tracker should only answer inbound requests.`
+        : `All data lives in a single local SQLite file (${config.dbPath}). No outbound transmission primitives in the server source (scanned ${outbound.files} files, ${outbound.lines} lines); nothing is transmitted off the box.`,
   第 32 页
 15-web-analytics V1.0
-        : `All data lives in a single local SQLite file (${config.dbPath}). No outbound transmission primitives in the server source (scanned ${outbound.files} files, ${outbound.lines} lines); nothing is transmitted off the box.`,
     },
     {
       id: 'data_retention',
@@ -1713,9 +1712,9 @@ export function generateAudit(db, opts = {}) {
     stats: {
       events: Number(stats.events),
       real_events: Number(stats.real_events),
+      guests: Number(stats.guests),
   第 33 页
 15-web-analytics V1.0
-      guests: Number(stats.guests),
       first_ts: stats.first_ts ? new Date(stats.first_ts).toISOString() : null,
       last_ts: stats.last_ts ? new Date(stats.last_ts).toISOString() : null,
       bytes: dbBytes,
@@ -1765,9 +1764,9 @@ import {
   realtime,
   totals,
   visitStats,
+  weeklySeries,
   第 34 页
 15-web-analytics V1.0
-  weeklySeries,
   totalsFiltered,
   visitStatsFiltered,
   dailySeriesFiltered,
@@ -1817,9 +1816,9 @@ function parseRange(query, defaultDays = 30) {
   const now = Date.now();
   let days = Number.parseInt(query.get('days'), 10);
   if (!Number.isFinite(days) || days < 1) days = defaultDays;
+  if (days > 3650) days = 3650;
   第 35 页
 15-web-analytics V1.0
-  if (days > 3650) days = 3650;
   let end = now;
   const toParam = query.get('to');
   if (toParam) {
@@ -1869,9 +1868,9 @@ function readJsonBody(req, limitBytes = 4096) {
       try {
         const parsed = raw ? JSON.parse(raw) : {};
         if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          reject(new Error('invalid json'));
   第 36 页
 15-web-analytics V1.0
-          reject(new Error('invalid json'));
           return;
         }
         resolve(parsed);
@@ -1921,9 +1920,9 @@ const collectLimiter =
     : null;
 function handleOverview(req, res) {
   const q = new URL(req.url, 'http:
+  const { start, end } = parseRange(q);
   第 37 页
 15-web-analytics V1.0
-  const { start, end } = parseRange(q);
   const filters = { page: q.get('page'), source: q.get('source'), device: q.get('device') };
   const fq = filteredQuery(filters);
   const hasFilter = Boolean(filters.page || filters.source || filters.device);
@@ -1973,9 +1972,9 @@ function handleOverview(req, res) {
       referrers: topReferrers(db, start, end, 50),
       hourly: hourlySeries(db, start, end),
       paths: entryExitPages(db, start, end, 50),
+      returning: returningStats(db, start, end),
   第 38 页
 15-web-analytics V1.0
-      returning: returningStats(db, start, end),
       range: { start, end, days: Math.round((end - start) / 864e5) },
       filters,
     };
@@ -2025,9 +2024,9 @@ async function handleExport(req, res) {
               res.once('close', finish);
             });
           }
+          if (++n % YIELD_EVERY === 0) await new Promise((resolve) => setImmediate(resolve));
   第 39 页
 15-web-analytics V1.0
-          if (++n % YIELD_EVERY === 0) await new Promise((resolve) => setImmediate(resolve));
         }
       } catch (err) {
         iter.return();
@@ -2077,9 +2076,9 @@ function handleAudit(req, res) {
       `Data flow:`,
       ...audit.data_flow.map((s) => `  ${s.step}. ${s.actor}: ${s.action}`),
       ``,
+      `Checks:`,
   第 40 页
 15-web-analytics V1.0
-      `Checks:`,
       ...audit.checks.map((c) => `  [${c.status.toUpperCase()}] ${c.label} — ${c.detail}`),
       ``,
       `Stats: events=${audit.stats.events} real=${audit.stats.real_events} guests=${audit.stats.guests} ip_rows=${audit.stats.ip_rows}`,
@@ -2129,9 +2128,9 @@ export function createServer() {
         return;
       }
       if (isRead(req) && (url.pathname === config.exportPath || url.pathname === '/api/export')) {
+        await handleExport(req, res);
   第 41 页
 15-web-analytics V1.0
-        await handleExport(req, res);
         return;
       }
       if (isRead(req) && (url.pathname === config.auditPath || url.pathname === '/api/audit')) {
@@ -2181,9 +2180,9 @@ export function createServer() {
         res.destroy();
       }
     }
+  });
   第 42 页
 15-web-analytics V1.0
-  });
 }
 function handleSnippet(res) {
   const files = [path.join(config.publicDir, 'wa.js'), path.join(import.meta.dirname, '..', 'public', 'wa.js')];
@@ -2233,9 +2232,9 @@ function serverStart() {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   setInterval(() => {
+    try {
   第 43 页
 15-web-analytics V1.0
-    try {
       refreshEntryExit(db, Date.now() - 2 * 24 * 3600 * 1000);
     } catch (e) {
       console.error('refresh failed', e);
@@ -2285,9 +2284,9 @@ const UA_POOL = {
   mobile_android_chrome:
     'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36',
   bot_google:
+    'Mozilla/5.0 (compatible; Googlebot/2.1; +http:
   第 44 页
 15-web-analytics V1.0
-    'Mozilla/5.0 (compatible; Googlebot/2.1; +http:
 };
 const PATHS = ['/', '/pricing', '/docs', '/blog', '/blog/cookies', '/features', '/about', '/contact'];
 export function seed(db, { days = 60, visitors = 12, verbose = false } = {}) {
@@ -2337,9 +2336,9 @@ export function seed(db, { days = 60, visitors = 12, verbose = false } = {}) {
   return n;
 }
 function main() {
+  const [, , cmd, ...rest] = process.argv;
   第 45 页
 15-web-analytics V1.0
-  const [, , cmd, ...rest] = process.argv;
   ensureDataDir();
   const db = openDb();
   try {
@@ -2389,9 +2388,9 @@ export function collectArgs(args) {
   const opts = {};
   for (const a of args) {
     const m = a.match(/^--([a-z-]+)=(.*)$/);
+    if (m) opts[m[1]] = m[2];
   第 46 页
 15-web-analytics V1.0
-    if (m) opts[m[1]] = m[2];
   }
   return opts;
 }
@@ -2417,6 +2416,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   main();
 }
 /* ===== src/public/wa.js ===== */
+
 
 
 

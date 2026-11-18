@@ -88,7 +88,8 @@ def banner(name: str) -> list[str]:
 
 
 def main() -> int:
-    content: list[str] = list(APPLICANT_LINES)
+    # 页眉本身已含 APPLICANT_LINES[0]（15-web-analytics V1.0），正文不再重复该行。
+    content: list[str] = list(APPLICANT_LINES[1:])
 
     for name in ORDER:
         path = SRC / name
