@@ -185,4 +185,8 @@ built-in `node:sqlite`, so there is nothing native to build.
 
 ## License
 
-MIT
+AGPL-3.0 dual-license. The source is released under the GNU Affero General
+Public License v3.0 (`LICENSE`); any profit-making or commercial use —
+embedding, SaaS hosting, integration into paid products, resale, and the
+like — additionally requires a prior written commercial authorization from
+the copyright holder. See `COMMERCIAL-LICENSE.md`.

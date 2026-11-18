@@ -70,7 +70,7 @@ test('npm pack ships exactly the allowlisted files and nothing else', () => {
       'the software-copyright filing directory never ships',
     );
     assert.ok(!files.includes('SPEC.md'), 'the internal spec never ships');
-    assert.ok(files.includes('LICENSE'), 'the MIT license always ships (MIT §1)');
+    assert.ok(files.includes('LICENSE'), 'the AGPL license text always ships (LICENSE is in the files allowlist)');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
