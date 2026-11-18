@@ -88,8 +88,31 @@ test('int(): non-numeric input falls back to the default, floats truncate at the
   assert.equal(floatPort.port, 12, 'parseInt truncates the fractional part');
   const { config: floatWindow } = await loadConfig({ WA_VISIT_WINDOW_MS: '30.7' });
   assert.equal(floatWindow.visitWindowMs, 30, 'visit window truncates too');
-  const { config: neg } = await loadConfig({ WA_RETENTION_DAYS: '-5' });
-  assert.equal(neg.retentionDays, -5, 'negative ints parse (caller gates semantics)');
+  const { config: negRetention } = await loadConfig({ WA_RETENTION_DAYS: '-5' });
+  assert.equal(negRetention.retentionDays, 0, 'negative ints are misconfiguration and fall back to the default');
+});
+
+test('int(): negative windows are rejected so time-window math cannot invert', async () => {
+  // A negative WA_REALTIME_WINDOW_MS makes realtime() compute
+  // start = now - window = now + |window| — a future-bounded interval that is
+  // always empty (silent dead dashboard). A negative WA_VISIT_WINDOW_MS makes
+  // insertEvent treat every pageview as a new visit (the gap > window test is
+  // always true). Both are wrong-data defects; the coercion must refuse them.
+  const { config: negLive } = await loadConfig({ WA_REALTIME_WINDOW_MS: '-1' });
+  assert.equal(negLive.realtimeWindowMs, 1_000 * 60 * 5, 'negative realtime window falls back to the 5m default');
+  const { config: negVisit } = await loadConfig({ WA_VISIT_WINDOW_MS: '-3600000' });
+  assert.equal(negVisit.visitWindowMs, 1_000 * 60 * 30, 'negative visit window falls back to the 30m default');
+  const { config: negRate } = await loadConfig({ WA_COLLECT_RATE_WINDOW_MS: '-60000' });
+  assert.equal(negRate.collectRateWindowMs, 60_000, 'negative rate window falls back to 60s');
+  const { config: negPort } = await loadConfig({ WA_PORT: '-8787' });
+  assert.equal(negPort.port, 8787, 'a negative port falls back to 8787 rather than binding port -8787');
+  // -0 parses to -0, which is just as degenerate as any other negative.
+  const { config: negZero } = await loadConfig({ WA_REALTIME_WINDOW_MS: '-0' });
+  assert.equal(negZero.realtimeWindowMs, 1_000 * 60 * 5, '-0 is rejected too');
+  // Sanity: legitimate non-negative overrides still parse.
+  const { config: ok } = await loadConfig({ WA_VISIT_WINDOW_MS: '0', WA_RETENTION_DAYS: '0' });
+  assert.equal(ok.visitWindowMs, 0, '0 remains a valid explicitly-configured value');
+  assert.equal(ok.retentionDays, 0, '0 disabled-prune remains 0');
 });
 
 test('dbPath resolution: WA_DB_PATH wins outright, WA_DATA_DIR derives the sibling path', async () => {

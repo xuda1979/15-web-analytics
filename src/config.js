@@ -15,7 +15,15 @@ function bool(value, fallback) {
 
 function int(value, fallback) {
   const n = Number.parseInt(value, 10);
-  return Number.isFinite(n) ? n : fallback;
+  // No tunable is ever meaningful when negative: a negative realtime/visit
+  // window inverts `now - window` into a future-bounded interval (realtime
+  // goes permanently empty, every pageview becomes a new visit), a negative
+  // rate-limiter window breaks the mod/floor window math (permanent 429s with
+  // a negative Retry-After), and negative retention days would prune nothing
+  // (the `> 0` gates treat it as disabled). Reject negatives — including -0,
+  // which parses fine but is just as degenerate — as misconfiguration and
+  // fall back to the documented default.
+  return Number.isFinite(n) && n >= 0 && !Object.is(n, -0) ? n : fallback;
 }
 
 const root = path.resolve(import.meta.dirname, '..');
