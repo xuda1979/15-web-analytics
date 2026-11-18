@@ -308,31 +308,39 @@ async function handleExport(req, res) {
     const streamAll = async (writeRow) => {
       const iter = exportEventsIter(db, start, end, fq)[Symbol.iterator]();
       let n = 0;
-      for (;;) {
-        if (res.destroyed) {
-          iter.return();
-          return;
+      try {
+        for (;;) {
+          if (res.destroyed) {
+            iter.return();
+            return;
+          }
+          const step = iter.next();
+          if (step.done) return;
+          // Backpressure: when the response buffer is full (res.write() returned
+          // false, meaning the client reads slower than we produce), park until
+          // the socket drains instead of letting Node buffer the entire export in
+          // memory. The 'close' escape keeps the loop from hanging when the
+          // client goes away mid-drain; the next iteration's destroyed-check then
+          // stops the scan and releases the statement.
+          if (writeRow(step.value) === false) {
+            await new Promise((resolve) => {
+              const finish = () => {
+                res.off('drain', finish);
+                res.off('close', finish);
+                resolve();
+              };
+              res.once('drain', finish);
+              res.once('close', finish);
+            });
+          }
+          if (++n % YIELD_EVERY === 0) await new Promise((resolve) => setImmediate(resolve));
         }
-        const step = iter.next();
-        if (step.done) return;
-        // Backpressure: when the response buffer is full (res.write() returned
-        // false, meaning the client reads slower than we produce), park until
-        // the socket drains instead of letting Node buffer the entire export in
-        // memory. The 'close' escape keeps the loop from hanging when the
-        // client goes away mid-drain; the next iteration's destroyed-check then
-        // stops the scan and releases the statement.
-        if (writeRow(step.value) === false) {
-          await new Promise((resolve) => {
-            const finish = () => {
-              res.off('drain', finish);
-              res.off('close', finish);
-              resolve();
-            };
-            res.once('drain', finish);
-            res.once('close', finish);
-          });
-        }
-        if (++n % YIELD_EVERY === 0) await new Promise((resolve) => setImmediate(resolve));
+      } catch (err) {
+        // A read can throw mid-export (interrupted/corrupt/locked page). Release
+        // the statement from the shared connection so later requests don't trip
+        // a lingering lock, then let the top-level catch handle the response.
+        iter.return();
+        throw err;
       }
     };
     if (format === 'csv') {
@@ -510,6 +518,13 @@ export function createServer() {
       if (!res.headersSent) {
         res.writeHead(500, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: 'internal' }));
+      } else {
+        // Headers already on the wire (e.g. a streaming export whose SQLite
+        // read threw mid-body), so no 500 is possible: the status line is out.
+        // Destroying the socket tells the client the response is truncated
+        // instead of leaving it waiting forever on a connection that will
+        // never end — a hung-request availability defect.
+        res.destroy();
       }
     }
   });

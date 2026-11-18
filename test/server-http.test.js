@@ -30,6 +30,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 
+import { SCHEMA } from '../src/schema.js';
 import { startServer, stopServer } from './helpers.js';
 
 // Close the shared in-process server so the runner can exit cleanly.
@@ -638,6 +639,63 @@ test('export: a stalled client caps the server-side buffer (backpressure parks t
     sleep(15000).then(() => ({ status: null, ok: false, timeout: true })),
   ]);
   assert.equal(out.status, 200, 'the export completes once the stalled client reads again');
+});
+
+test('export: a SQLite error after headers were sent truncates the connection instead of hanging it', async () => {
+  const { port, request, db } = await startServer();
+
+  // handleExport sends writeHead BEFORE touching the database: the raw export
+  // path writes headers, then the iterator's first next() lazily prepares the
+  // SELECT. If that read throws (events table missing, corrupt page, I/O
+  // error), the code runs after the status line is on the wire — a 500 is
+  // impossible. The handler must destroy the socket so the client sees a
+  // truncated response instead of waiting forever on a connection that will
+  // never end (a hung-request availability defect).
+  db.exec('DROP TABLE events');
+
+  const outcome = await new Promise((resolve) => {
+    let settled = false;
+    const settle = (v) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    };
+    const req = http.request(
+      { host: '127.0.0.1', port, method: 'GET', path: '/api/export?days=1' },
+      (res) => {
+        res.on('data', () => {});
+        res.on('end', () => settle({ status: res.statusCode, ended: true }));
+        res.on('close', () => {
+          if (res.complete) return;
+          settle({ status: res.statusCode, truncated: true });
+        });
+        res.on('error', () => settle({ status: res.statusCode, truncated: true }));
+      },
+    );
+    req.on('error', () => settle({ status: null, truncated: true }));
+    req.setTimeout(5000, () => {
+      req.destroy();
+      settle({ status: null, hung: true });
+    });
+    req.end();
+  });
+
+  assert.equal(outcome.status, 200, 'the export answered 200 before the read failed (headers were sent)');
+  assert.ok(outcome.truncated, `a post-header failure destroys the connection instead of hanging it, got ${JSON.stringify(outcome)}`);
+  assert.ok(!outcome.hung, 'the response never hangs waiting for an end that will not come');
+
+  // The truncated export must not take the server down.
+  const health = await request('GET', '/api/health');
+  assert.equal(health.status, 200, 'health still answers after a mid-export SQLite failure');
+
+  // Restore the broken table for every later test (the always-last error test
+  // below re-breaks it on purpose).
+  db.exec(SCHEMA);
+  const collect = await request('POST', '/api/collect', { path: '/post-truncation' }, {
+    'x-forwarded-for': '203.0.113.11',
+    'user-agent': 'UA-Trunc',
+  });
+  assert.equal(collect.status, 204, 'writes work again after the schema is restored');
 });
 
 // MUST stay the last test in this file: it deliberately breaks the shared
