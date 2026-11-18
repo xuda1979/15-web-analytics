@@ -25,7 +25,7 @@
     "plausible",
     "fathom"
   ],
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "files": [
     "src",
     "public",
