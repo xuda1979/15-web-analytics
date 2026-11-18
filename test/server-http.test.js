@@ -7,10 +7,17 @@
 // first element), the CSV export content negotiation (content-type +
 // content-disposition), the audit text format, 404/wrong-method/missing-static
 // responses, static serving with the encoded-traversal guard, the health
-// shape, and the baseline hardening headers.
+// shape, and the baseline hardening headers. Also pinned is the streaming raw
+// export's cooperative loop: it must yield to the event loop (a synchronous
+// multi-year iteration starves every other request — an availability DoS) and
+// stop early when the client disconnects, while the streamed body stays
+// byte-identical to the one-shot materialization.
 //
 // helpers.js boots one server per process and one DB per process, so sibling
 // tests share data — every test uses unique paths/IPs and relative assertions.
+// The export-cooperation test seeds ~60k rows 90 days in the past and pins
+// from/to bounds, so the fixture stays out of sibling tests' relative windows
+// and out of the audit's stored-IP/retention gates (ip stays NULL).
 
 // NOTE: no static `../src/*` imports here on purpose. helpers.js sets the
 // WA_* env vars (including WA_DATA_DIR) and then loads src/server.js via a
@@ -78,6 +85,39 @@ function rawRequestCapture(port, method, url, body, headers = {}) {
     req.end();
   });
 }
+
+// Starts a GET whose completion is NOT awaited: export-cooperation tests need
+// to interleave a sibling request between the export's start and its end
+// (and, for the abort half, to destroy the client socket mid-stream). `done`
+// resolves with the buffered response only when the server finishes the body.
+// The terminal resolution is exhaustive because the abort half never gets an
+// 'end': the peer destroys the socket mid-body, so it must also resolve on a
+// request error, an aborted/closed response, or a response-stream error.
+function startStream(port, url) {
+  let resolveDone;
+  const done = new Promise((resolve) => {
+    resolveDone = resolve;
+  });
+  const settle = (v) => {
+    if (settled) return;
+    settled = true;
+    resolveDone(v);
+  };
+  let settled = false;
+  const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: url }, (res) => {
+    const chunks = [];
+    res.on('data', (c) => chunks.push(c));
+    res.on('end', () => settle({ status: res.statusCode, text: () => Buffer.concat(chunks).toString('utf8') }));
+    res.on('aborted', () => settle({ status: null, aborted: true }));
+    res.on('error', (err) => settle({ status: null, error: err.code }));
+    res.on('close', () => settle({ status: null, error: 'ECONNRESET' }));
+  });
+  req.on('error', (err) => settle({ status: null, error: err.code }));
+  req.end();
+  return { req, done };
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test('collect: an oversized payload trips a hard connection reset, not a 4xx', async () => {
   const { port, request } = await startServer();
@@ -423,6 +463,90 @@ test('audit: the text=1 shorthand renders the same plain-text report', async () 
   // generated_at is re-stamped per request, so drop that line before comparing.
   const stripStamp = (t) => t.split('\n').filter((l) => !l.startsWith('Generated: ')).join('\n');
   assert.equal(stripStamp(alias.text()), stripStamp(canonical.text()), 'text=1 and format=text render an identical report');
+});
+
+test('export: the raw stream yields to the event loop, stays byte-identical, and survives client aborts', async () => {
+  const { port, request, db } = await startServer();
+
+  // ~40k rows 90 days in the past under pinned from/to bounds, so the fixture
+  // is out of sibling tests' relative windows and the audit's stored-IP gates
+  // (ip stays NULL: the export then redacts ip to null on every row).
+  const RAW_COLS = ['visited_at', 'guest_key', 'visit_key', 'ip', 'path', 'entry_path', 'exit_path', 'referrer', 'ref_domain', 'title', 'screen_w', 'screen_h', 'lang', 'country', 'browser', 'browser_version', 'device', 'device_model', 'os', 'ua'];
+  const N = 40000;
+  const base = Date.now() - 90 * 86_400_000;
+  const ins = db.prepare(
+    `INSERT INTO events (ts, visited_at, guest_key, ua, path, referrer, title, screen_w, screen_h, lang)
+     VALUES (?, ?, ?, 'UA-Coop', ?, '', 't', 1920, 1080, 'en')`,
+  );
+  for (let n = 1; n <= N; n++) {
+    const ts = base + n * 1000;
+    ins.run(ts, new Date(ts).toISOString().replace(/\.\d{3}Z$/, ''), `g${n % 50}`, `/coop/${n}`);
+  }
+
+  const from = base - 1;
+  const to = base + N * 1000 + 1;
+  // parseRange feeds from/to through Date.parse(), which rejects bare epoch
+  // numbers ("1700000000000" -> NaN) but parses ISO-8601 exactly, so send the
+  // numeric bounds as ISO strings to pin the window deterministically.
+  const isoFrom = new Date(from).toISOString();
+  const isoTo = new Date(to).toISOString();
+  const url = `/api/export?from=${isoFrom}&to=${isoTo}`;
+
+  // Byte-identity oracle: the streamed body must equal the one-shot
+  // materialization exactly. The export iter yields {...r, visitsSerial:
+  // Number(r.id), ip: null} (SELECT id + the 20 CSV columns in that order,
+  // ip never stored), so the same SELECT + a trailing visitsSerial covers it.
+  const expected = JSON.stringify(
+    db
+      .prepare(`SELECT id, ${RAW_COLS.join(', ')} FROM events WHERE ts >= ? AND ts <= ? AND is_bot = 0 ORDER BY ts`)
+      .all(from, to)
+      .map((r) => ({ ...r, visitsSerial: Number(r.visitsSerial || r.id) })),
+  );
+
+  // (1) A completed stream is byte-identical to the materialized body.
+  const full = await startStream(port, url).done;
+  assert.equal(full.status, 200, 'the streamed export answers 200');
+  assert.equal(full.text(), expected, 'the raw JSON stream matches the one-shot materialization exactly');
+
+  // (2) Mid-export the event loop must still serve other requests: the old
+  // synchronous loop froze the process for ~3s on 300k rows (an availability
+  // DoS). A collect and a health probe fired while a fresh export iterates
+  // must both resolve instead of waiting for the whole range to drain.
+  const coop = startStream(port, url);
+  await sleep(100); // the export handler is safely inside its iteration loop
+  const t0 = Date.now();
+  const [collect, health] = await Promise.all([
+    request('POST', '/api/collect', { path: '/coop-live' }, {
+      'x-forwarded-for': '203.0.113.9',
+      'user-agent': 'UA-CoopLive',
+    }),
+    request('GET', '/api/health'),
+  ]);
+  const elapsed = Date.now() - t0;
+  assert.equal(collect.status, 204, 'a collect fired mid-export is served');
+  assert.equal(health.status, 200, 'health fired mid-export is served');
+  assert.ok(elapsed < 1000, `sibling requests completed without waiting for the full export (${elapsed}ms)`);
+  const coopDone = await coop.done;
+  assert.equal(coopDone.status, 200, 'the interleaved export still completes');
+
+  // (3) A client abort must not take the server down: destroying the socket
+  // mid-stream short-circuits the scan (res.destroyed flips before the next
+  // iteration continues), and the process keeps serving afterwards. The server
+  // notices the dead peer one event-loop turn after this test's own await, so
+  // sleep before asserting so the handler has run iter.return() and released
+  // its statement from the shared connection (otherwise the next test's write
+  // would trip a lingering single-connection lock).
+  const abort = startStream(port, url);
+  await sleep(100);
+  abort.req.destroy();
+  const aborted = await abort.done;
+  assert.ok(aborted.status === null, `an aborted stream never completes a status line, got ${JSON.stringify(aborted)}`);
+  await sleep(150);
+  const alive = await request('POST', '/api/collect', { path: '/coop-alive' }, {
+    'x-forwarded-for': '203.0.113.10',
+    'user-agent': 'UA-CoopAlive',
+  });
+  assert.equal(alive.status, 204, 'the server keeps serving after a mid-stream client abort');
 });
 
 // MUST stay the last test in this file: it deliberately breaks the shared

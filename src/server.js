@@ -259,7 +259,7 @@ function handleRealtime(req, res) {
   res.end(JSON.stringify(realtime(db)));
 }
 
-function handleExport(req, res) {
+async function handleExport(req, res) {
   const q = new URL(req.url, 'http://localhost').searchParams;
   const { start, end } = parseRange(q, 30);
   const format = q.get('format') === 'csv' ? 'csv' : 'json';
@@ -283,24 +283,45 @@ function handleExport(req, res) {
     // materializes the full result (or a single giant body string) in memory.
     // JSON and CSV writes below are byte-identical to the previous one-shot
     // bodies; res.write() buffers in Node, so row-by-row writes stay cheap.
+    //
+    // The iterator is stepped manually so the loop can yield to the event
+    // loop every YIELD_EVERY rows: a synchronous for...of over a multi-year
+    // range keeps the single thread busy for seconds and starves every other
+    // request (pageview collect, health, dashboard) — an availability DoS.
+    // A periodic setImmediate let interleaved requests run, and a destroyed
+    // response (client aborted) stops the scan instead of iterating the rest
+    // of the range just to write into a dead socket.
     const fq = filters.page || filters.source || filters.device ? filteredQuery(filters) : null;
+    const YIELD_EVERY = 256;
+    const streamAll = async (writeRow) => {
+      const iter = exportEventsIter(db, start, end, fq)[Symbol.iterator]();
+      let n = 0;
+      for (;;) {
+        if (res.destroyed) {
+          iter.return();
+          return;
+        }
+        const step = iter.next();
+        if (step.done) return;
+        writeRow(step.value);
+        if (++n % YIELD_EVERY === 0) await new Promise((resolve) => setImmediate(resolve));
+      }
+    };
     if (format === 'csv') {
       // Prefix a UTF-8 BOM so Windows Excel decodes the export as UTF-8 and
       // renders multibyte text (Chinese titles/referrers) correctly instead of
       // re-decoding the byte stream as ANSI/GBK and showing mojibake.
       res.write('\ufeff');
       res.write(CSV_COLUMNS.join(',') + '\n');
-      for (const row of exportEventsIter(db, start, end, fq)) {
-        res.write(csvRow({ ...row, visitsSerial: undefined }, CSV_COLUMNS) + '\n');
-      }
+      await streamAll((row) => res.write(csvRow({ ...row, visitsSerial: undefined }, CSV_COLUMNS) + '\n'));
     } else {
       res.write('[');
       let first = true;
-      for (const row of exportEventsIter(db, start, end, fq)) {
+      await streamAll((row) => {
         if (!first) res.write(',');
         res.write(JSON.stringify(row));
         first = false;
-      }
+      });
       res.write(']');
     }
     res.end();
@@ -407,7 +428,7 @@ export function createServer() {
         return;
       }
       if (isRead(req) && (url.pathname === config.exportPath || url.pathname === '/api/export')) {
-        handleExport(req, res);
+        await handleExport(req, res);
         return;
       }
       if (isRead(req) && (url.pathname === config.auditPath || url.pathname === '/api/audit')) {
