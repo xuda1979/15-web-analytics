@@ -1,6 +1,6 @@
 软件名称：15-web-analytics
 软件版本：V1.0
-著作权人：xuda1979
+著作权人：许达（工作单位：中国移动研究院）
 文档名称：软件设计说明书
 编写依据：GB/T 8567-2006《计算机软件文档编制规范》
 
@@ -112,17 +112,17 @@
 　　│　　　　　　│　　　　　　　　　　　　　　　　　　　　　│ 后行数 │
 　　├────────────┼───────────────────────────────────────┼─────────┤
 　　│ config.js　│ 读取 WA_* 环境变量，输出全局配置对象　　│　42　　│
-　　│ store.js　 │ SQLite 打开、迁移、日期键值工具　　　　　│　68　　│
-　　│ schema.js　│ 数据库表与索引定义（DDL）　　　　　　　　│　85　　│
+　　│ store.js　 │ SQLite 打开、迁移、日期键值工具　　　　　│　69　　│
+　　│ schema.js　│ 数据库表与索引定义（DDL）　　　　　　　　│　65　　│
 　　│ privacy.js │ HMAC 游客哈希、密钥读写、IP 匿名化　　　│　34　　│
-　　│ ua.js　　　│ User-Agent 本地解析、爬虫识别　　　　　　│　20　　│
-　　│ collector.js│ 事件规范化、写入、聚合缓存、会话边界　　│　215　　│
-　　│ analytics.js│ 时间序列、Top 榜单、入口出口、实时、KPI│　394　　│
-　　│ exporter.js│ 事件/汇总 CSV、JSON 导出　　　　　　　　│　97　　│
-　　│ ratelimit.js│ 定窗口 IP 限流器　　　　　　　　　　　　│　32　　│
-　　│ retention.js│ 过期事件清理与缓存重建　　　　　　　　　│　84　　│
-　　│ audit.js　 │ 隐私审计报告生成　　　　　　　　　　　　│　138　　│
-　　│ server.js　│ HTTP 服务、路由、自动留存调度　　　　　　│　379　　│
+　　│ ua.js　　　│ User-Agent 本地解析、爬虫识别　　　　　　│　29　　│
+　　│ collector.js│ 事件规范化、写入、聚合缓存、会话边界　　│　204　　│
+　　│ analytics.js│ 时间序列、Top 榜单、入口出口、实时、KPI│　657　　│
+　　│ exporter.js│ 事件/汇总 CSV、JSON 导出　　　　　　　　│　127　　│
+　　│ ratelimit.js│ 定窗口 IP 限流器　　　　　　　　　　　　│　38　　│
+　　│ retention.js│ 过期事件清理与缓存重建　　　　　　　　　│　59　　│
+　　│ audit.js　 │ 隐私审计报告生成　　　　　　　　　　　　│　333　　│
+　　│ server.js　│ HTTP 服务、路由、自动留存调度　　　　　　│　509　　│
 　　│ cli.js　　 │ 命令行：seed / collect / prune / audit　│　143　　│
 　　│ public/wa.js│ 浏览器端采集脚本（压缩后约 1KB）　　　　│　　-　　│
 　　└────────────┴───────────────────────────────────────┴─────────┘
@@ -171,7 +171,7 @@
 　　ratelimit.js：RateLimiter 类（check / keyFor / tick）；
 　　retention.js：pruneEvents(db, cutoffMs)；
 　　audit.js　：generateAudit(db)；
-　　server.js ：createServer()，startServer()（测试引导），导出 __db。
+　　server.js ：createServer()（测试引导），导出 __db。
 
 2.4 接口（HTTP API）设计
 　　表 2-3 HTTP 接口
@@ -224,7 +224,7 @@
 　　│ visit_key　　　 │ INTEGER　　 │ 所属访问首个事件的时间戳　　　 │
 　　│ entry_path/exit_path │ TEXT │ 访问的入口页 / 出口页　　　　 │
 　　│ browser / browser_version │ TEXT │ 浏览器名 / 主版本号　 │
-　　│ device / os　　 │ TEXT　　　　 │ 设备类型 / 操作系统　　　　　 │
+　　│ device / device_model / os │ TEXT │ 设备类型 / 机型 / 系统 │
 　　│ is_bot　　　　　│ INTEGER　　 │ 1 表示爬虫 / 机器人（不进指标）│
 　　└─────────────────┴─────────────┴───────────────────────────────┘
 
@@ -232,18 +232,19 @@
 　　┌───────────────────┬─────────────────────────────────────────┐
 　　│ 表名　　　　　　　 │ 说明　　　　　　　　　　　　　　　　　　 │
 　　├───────────────────┼─────────────────────────────────────────┤
-　　│ agg_daily_pages　 │ 日 × 页面：visits/uniques/entries/exits│
-　　│ agg_daily_sources │ 日 × 来源域名（含（直接访问））　　　　 │
-　　│ agg_daily_devices │ 日 × 设备类型　　　　　　　　　　　　　 │
-　　│ agg_daily_browsers│ 日 × 浏览器　　　　　　　　　　　　　　 │
-　　│ agg_daily_realtime│ 日 × 1 分钟桶（实时统计数据源）　　　　 │
+　　│ agg_daily_realtime│ 日 × 1 分钟桶：visits/uniques，实时趋势 │
+　　│　　　　　　　　　 │ 按分钟读数（实时统计数据源）　　　　　　│
 　　│ agg_monthly_buckets│ 周 / 月桶：yyyymm × (week|month) × 起点│
 　　│ meta　　　　　　　 │ 键值元信息（schema_version、last_prune）│
 　　└───────────────────┴─────────────────────────────────────────┘
+　　（说明：页面、来源、设备、浏览器等 Top 榜与入口/出口图均由 events 原始
+　　表实时聚合，不再冗余缓存；写路径仅维护上述分钟桶与周/月桶，图表读取与
+　　原始数据天然一致。）
 
 　　2.5.3 索引
 　　idx_events_ts（ts）、idx_events_guest（guest_key, ts）、
-　　idx_events_path（path）、idx_events_visit（visit_key）。
+　　idx_events_path_ts（path, ts，页面筛选按窗口限界扫描）、
+　　idx_events_visit（visit_key）、idx_agg_realtime_bucket（bucket1m）。
 
 ========================================================
 3 详细设计
@@ -298,11 +299,11 @@
 　　关键算法——访问边界：新访问事件以自身 ts 为 visit_key、自身 path 同时为临
 　　时 entry/exit；延续访问沿用前一事件的 visit_key 与 entry_path，以当前 path
 　　刷新 exit_path。随后写入 events 表。
-　　关键算法——写穿式缓存：仅对非爬虫事件增量更新六个聚合表。每一行按维度键
-　　upsert，visits+1、uniques+isUnique；入口/出口计数在 agg_daily_pages 先按
-　　isUnique 预置 ±1（最终准确值由 refreshEntryExit 收敛）；实时桶以 ts 对齐到
-　　分钟写入 agg_daily_realtime；周 / 月桶写入 agg_monthly_buckets（weekStart /
-　　monthStart 对齐）。全部写入同一 SQLite 事务提交即一致。
+　　关键算法——写穿式缓存：仅对非爬虫事件增量更新聚合缓存。分钟桶以 ts 对齐
+　　到分钟写入 agg_daily_realtime；周 / 月桶按 weekStart / monthStart 对齐写入
+　　agg_monthly_buckets；visits+1、uniques+isUnique。全部写入同一 SQLite 事务
+　　提交即一致。页面、来源、设备、浏览器等 Top 榜与入口 / 出口图不冗余缓存，
+　　由 analytics 模块对 events 实时聚合，保证图表与原始数据天然一致。
 　　3.5.3 refreshEntryExitCore / refreshEntryExit
 　　算法：取 [sinceMs, ∞) 非爬虫事件按（guest_key, ts）排序；对每个游客，按访
 　　问窗口切分“帧”（帧内相邻事件间隔 ≤ visitWindowMs）；每帧第一事件 path 为
@@ -350,9 +351,9 @@
 3.9 数据留存模块（retention.js）
 　　算法（pruneEvents）：
 　　(1) 开启事务；DELETE FROM events WHERE ts < cutoffMs；
-　　(2) 若删除数 >0：清空六个聚合表，从存留的非爬虫事件（按 guest_key, ts 排
-　　　　序）重建全部缓存——复刻 insertEvent 的唯一访客判定（首条 / 间隔 >
-　　　　visitWindowMs 记 1）、入口出口预置、实时桶、周 / 月桶；
+　　(2) 若删除数 >0：清空分钟桶与周 / 月桶聚合缓存，从存留的非爬虫事件（按
+　　　　guest_key, ts 排序）重建全部缓存——复刻 insertEvent 的唯一访客判定
+　　　　（首条 / 间隔 > visitWindowMs 记 1）、实时桶、周 / 月桶；
 　　(3) 调用 refreshEntryExitCore 重建入口 / 出口边（此时位于同一事务内，故用
 　　　　无事务核心变体，避免“事务嵌套”错误）；
 　　(4) 记录 meta.last_prune；提交。删除为 0 时直接提交且不动缓存——保证不变式
@@ -390,7 +391,7 @@
 　　页面装载 → 执行 wa.js（sendBeacon 优先，XHR 兜底；导航类型为 bfcache/
 　　restore 时跳过）→ POST /api/collect（path/referrer/title/sw/sh/lang）→
 　　server 限流判定 → JSON 校验（≤4KB）→ normalizeEvent（UA 解析、爬虫标记、
-　　游客键求值）→ insertEvent（写 events + 写穿式更新六张聚合缓存）→ 204。
+　　游客键求值）→ insertEvent（写 events + 写穿式更新聚合缓存）→ 204。
 　　3.13.2 仪表盘统计读取流程
 　　GET /api/overview?days=30（可选筛选）→ 无筛选：totals + visitStats +
 　　series(读缓存) + 各 Top 榜 + 入口/出口；有筛选：全部退化为 events 直接读取
