@@ -36,6 +36,7 @@ import {
   topReferrers,
   entryExitPages,
   realtime,
+  realtimeFiltered,
   totals,
   visitStats,
   weeklySeries,
@@ -276,8 +277,14 @@ function handleOverview(req, res) {
 }
 
 function handleRealtime(req, res) {
+  const q = new URL(req.url, 'http://localhost').searchParams;
+  const filters = { page: q.get('page'), source: q.get('source'), device: q.get('device') };
+  // A filtered poll must share the dashboard's scope: the badge and sparkline
+  // describe the same filtered traffic as the overview cards, not all traffic.
+  const hasFilter = Boolean(filters.page || filters.source || filters.device);
+  const body = hasFilter ? realtimeFiltered(db, filteredQuery(filters)) : realtime(db);
   res.writeHead(200, { 'content-type': 'application/json' });
-  res.end(JSON.stringify(realtime(db)));
+  res.end(JSON.stringify(body));
 }
 
 async function handleExport(req, res) {

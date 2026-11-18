@@ -364,7 +364,15 @@
   }
 
   function loadRealtime() {
-    fetch('/api/realtime')
+    // Carry the active page/source/device filters so the badge and sparkline
+    // stay scoped to the same traffic the overview cards show; onChange() of a
+    // filter select reloads the overview and this poll picks up the new scope
+    // on its next tick, so the two never advertise contradicting numbers.
+    var u = new URL('/api/realtime', location.origin);
+    if (state.page) u.searchParams.set('page', state.page);
+    if (state.source) u.searchParams.set('source', state.source);
+    if (state.device) u.searchParams.set('device', state.device);
+    fetch(u.pathname + '?' + u.searchParams.toString())
       .then(function (r) { return r.json(); })
       .then(function (d) {
         var cur = d.current || { visits: 0, uniques: 0 };

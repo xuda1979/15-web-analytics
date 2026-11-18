@@ -346,6 +346,37 @@ export function realtime(db, now = Date.now()) {
   };
 }
 
+// Filtered realtime: the aggregate cache carries no page/source/device
+// dimension, so a filtered poll reads raw events and buckets each row to the
+// same floor(ts / MINUTE) alignment the collector writes, keeping the sparkline
+// and badge aligned with the unfiltered view. The raw read stays bounded: the
+// window is at most a few minutes.
+export function realtimeFiltered(db, fq, now = Date.now()) {
+  const start = now - config.realtimeWindowMs;
+  const rows = db
+    .prepare(
+      `SELECT (ts / 60000) * 60000 AS bucket1m,
+              COUNT(*) AS visits,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN guest_key END) AS uniques
+       FROM events
+       WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND ${fq.sql}
+       GROUP BY bucket1m ORDER BY bucket1m`,
+    )
+    .all(start, now, ...fq.args);
+  if (!rows.length) {
+    return { buckets: [], current: { visits: 0, uniques: 0 } };
+  }
+  const current = rows[rows.length - 1];
+  return {
+    buckets: rows.map((r) => ({
+      ts: Number(r.bucket1m),
+      visits: Number(r.visits),
+      uniques: Number(r.uniques),
+    })),
+    current: { visits: Number(current.visits), uniques: Number(current.uniques) },
+  };
+}
+
 export function totals(db, startMs, endMs) {
   const w = whereClause(startMs, endMs);
   const row = db

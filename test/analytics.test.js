@@ -51,6 +51,7 @@ import {
   hourlySeries,
   hourlySeriesFiltered,
   realtime,
+  realtimeFiltered,
   totals,
   totalsFiltered,
   visitStats,
@@ -437,6 +438,53 @@ test('realtime read cost does not grow with the archive age of agg_daily_realtim
     elapsed < 50,
     `realtime over a ${(years * 365 * rowsPerDay).toLocaleString()}-row archive should be an index seek (<50ms), took ${elapsed.toFixed(1)}ms`,
   );
+});
+
+test('realtimeFiltered aggregates raw events by minute bucket honoring the filter', () => {
+  const { db, insert } = fresh();
+  const now = T + 5 * MIN;
+  // Two pages in the window; the filter narrows to /paid only. Uniques follow
+  // the raw-read convention used across the *Filtered family (COUNT(DISTINCT
+  // guest_key) per bucket), not the cache's per-visit-start heuristic.
+  insert({ guest_key: 'g1', ts: T + 3 * MIN, path: '/paid', ref_domain: 'google.com', device: 'desktop' });
+  insert({ guest_key: 'g1', ts: T + 4 * MIN + 30_000, path: '/paid', ref_domain: 'google.com', device: 'desktop' });
+  insert({ guest_key: 'g2', ts: T + 4 * MIN + 10_000, path: '/free', ref_domain: null, device: 'mobile' });
+  insert({ guest_key: 'g3', ts: T + 4 * MIN + 20_000, path: '/paid', ref_domain: 'google.com', device: 'desktop', is_bot: 1 });
+  insert({ guest_key: 'g4', ts: T + 4 * MIN + 50_000, path: '/paid', ref_domain: 'google.com', device: 'desktop' });
+  const fq = { sql: 'path = ?', args: ['/paid'] };
+
+  const rt = realtimeFiltered(db, fq, now);
+  assert.deepEqual(rt, {
+    buckets: [
+      { ts: T + 3 * MIN, visits: 1, uniques: 1 },
+      // g1's continuation + g4's visit in the same minute: 2 visits, 2 distinct
+      // guests; g3 is a bot and stays out of both counts.
+      { ts: T + 4 * MIN, visits: 2, uniques: 2 },
+    ],
+    current: { visits: 2, uniques: 2 },
+  }, 'filters narrow scope, bots stay out, buckets align to minute boundaries');
+});
+
+test('realtimeFiltered honors source and device predicates and the window clamp', () => {
+  const { db, insert } = fresh();
+  const now = T + 5 * MIN;
+  insert({ guest_key: 'g1', ts: T + 3 * MIN + 10_000, path: '/paid', ref_domain: 'google.com', device: 'mobile' });
+  insert({ guest_key: 'g2', ts: T + 3 * MIN + 20_000, path: '/paid', ref_domain: 'bing.com', device: 'mobile' });
+  insert({ guest_key: 'g3', ts: T + 4 * MIN, path: '/paid', ref_domain: 'google.com', device: 'desktop' });
+  insert({ guest_key: 'g4', ts: T - 30 * MIN, path: '/paid', ref_domain: 'google.com', device: 'mobile' }); // before window
+  insert({ guest_key: 'g5', ts: T + 10 * MIN, path: '/paid', ref_domain: 'google.com', device: 'mobile' }); // after `now`
+  const fq = { sql: 'ref_domain = ? AND device = ?', args: ['google.com', 'mobile'] };
+  const rt = realtimeFiltered(db, fq, now);
+  assert.deepEqual(rt, {
+    buckets: [{ ts: T + 3 * MIN, visits: 1, uniques: 1 }],
+    current: { visits: 1, uniques: 1 },
+  }, 'out-of-window rows are clamped out, compound predicates narrow correctly');
+});
+
+test('realtimeFiltered on an empty DB returns the zeroed empty form', () => {
+  const { db } = fresh();
+  const fq = { sql: 'path = ?', args: ['/nope'] };
+  assert.deepEqual(realtimeFiltered(db, fq, T + MIN), { buckets: [], current: { visits: 0, uniques: 0 } });
 });
 
 test('totals counts a range inclusive of end and never counts bots', () => {

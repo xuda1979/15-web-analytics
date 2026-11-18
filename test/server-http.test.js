@@ -465,7 +465,46 @@ test('export: a filtered CSV summary serializes every section under the filter',
   assert.match(totalsBlock, /visits,uniques\n1,1/, 'totals reflect only the filtered path');
 });
 
-test('export: the unfiltered CSV summary contrasts by counting every row', async () => {
+test('realtime: the endpoint narrows its bucket scope to an active filter', async () => {
+  const { request } = await startServer();
+
+  // Fresh distinct paths and IPs so sibling rows in the shared in-process DB
+  // cannot leak in: the filtered poll must return exactly this path's counts
+  // while the unfiltered poll must see strictly more traffic.
+  await request('POST', '/api/collect', { path: '/frt/a' }, {
+    'x-forwarded-for': '198.51.100.70',
+    'user-agent': 'UA-Frt',
+  });
+  await request('POST', '/api/collect', { path: '/frt/a' }, {
+    'x-forwarded-for': '198.51.100.71',
+    'user-agent': 'UA-Frt',
+  });
+  await request('POST', '/api/collect', { path: '/frt/b' }, {
+    'x-forwarded-for': '198.51.100.72',
+    'user-agent': 'UA-Frt',
+  });
+
+  const filtered = await request('GET', '/api/realtime?page=%2Ffrt%2Fa');
+  assert.equal(filtered.status, 200);
+  assert.match(filtered.headers['content-type'], /^application\/json/);
+  const f = filtered.json();
+  assert.ok(Array.isArray(f.buckets) && f.buckets.length > 0, 'filtered realtime returns the in-window bucket');
+  assert.equal(f.current.visits, 2, 'the filter narrows to /frt/a only');
+  assert.equal(f.buckets.reduce((a, b) => a + b.visits, 0), 2, 'buckets sum to the filtered visits');
+
+  // Unfiltered poll must include the sibling path traffic on top.
+  const all = (await request('GET', '/api/realtime')).json();
+  assert.ok(
+    all.current.visits > 2,
+    `the unfiltered poll still counts all traffic (got ${all.current.visits})`,
+  );
+
+  // A filter matching nothing returns the zeroed empty form, not an error.
+  const none = await request('GET', '/api/realtime?page=%2Ffrt%2Fnope');
+  assert.deepEqual(none.json(), { buckets: [], current: { visits: 0, uniques: 0 } });
+});
+
+test('realtime: the unfiltered CSV summary contrasts by counting every row', async () => {
   const { request } = await startServer();
 
   // The shared in-process DB carries dozens of sibling rows (the 60 /rl-*
