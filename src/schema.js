@@ -65,10 +65,14 @@ CREATE TABLE IF NOT EXISTS meta (
 `;
 
 export const SCHEMA_INDEXES = `
-CREATE INDEX IF NOT EXISTS idx_events_ts     ON events(ts);
-CREATE INDEX IF NOT EXISTS idx_events_guest  ON events(guest_key, ts);
-CREATE INDEX IF NOT EXISTS idx_events_path   ON events(path);
-CREATE INDEX IF NOT EXISTS idx_events_visit  ON events(visit_key);
+CREATE INDEX IF NOT EXISTS idx_events_ts      ON events(ts);
+CREATE INDEX IF NOT EXISTS idx_events_guest   ON events(guest_key, ts);
+-- Composite (path, ts): page-filtered reads seek within the queried window
+-- instead of scanning the path's full history (the single-column path index
+-- beat the ts index and ignored the window entirely). The composite also
+-- covers bare path=? lookups, so no separate single-column index is needed.
+CREATE INDEX IF NOT EXISTS idx_events_path_ts ON events(path, ts);
+CREATE INDEX IF NOT EXISTS idx_events_visit   ON events(visit_key);
 CREATE INDEX IF NOT EXISTS idx_agg_realtime_bucket ON agg_daily_realtime(bucket1m);
 `;
 

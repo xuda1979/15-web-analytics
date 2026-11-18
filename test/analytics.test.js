@@ -588,6 +588,64 @@ test('returningStats read cost is bounded by the queried window, not all-time hi
   db.close();
 });
 
+test('page-filtered reads seek a composite path+ts index instead of scanning the path (availability)', () => {
+  // A `path = ?` filter competing with the ts window lets the planner pick the
+  // single-column path index, which seeks by path and then scans the path's
+  // ENTIRE history — the queried window no longer bounds read cost, so a hot
+  // path degrades O(archive) no matter how short the range. EXPLAIN pre-fix:
+  // `USING INDEX idx_events_path (path=?)`, no ts bound. The composite
+  // `idx_events_path_ts (path, ts)` flips the plan to a window-bounded seek
+  // (`idx_events_path_ts (path=? AND ts>? AND ts<?)`) and keeps serving plain
+  // path lookups as a covering index, so the single-column index is dropped.
+  const { db, insert } = fresh();
+  const start = T - 7 * 24 * HOUR;
+  const end = T + SPAN;
+
+  // A hot path carries ~4 years of history far outside the window (40k rows),
+  // plus two in-window visits; sibling paths keep the archive wide.
+  db.exec('BEGIN');
+  for (let n = 0; n < 40_000; n++) {
+    const ts = start - 24 * HOUR - (n % 1400) * 24 * HOUR;
+    insert({ guest_key: `hist-${n}`, ts, path: '/hot' });
+  }
+  db.exec('COMMIT');
+  insert({ guest_key: 'g1', ts: T - 2 * 24 * HOUR, path: '/hot' });
+  insert({ guest_key: 'g2', ts: T - 3 * 24 * HOUR, path: '/hot' });
+  insert({ guest_key: 'g3', ts: T - 3 * 24 * HOUR, path: '/hot', is_bot: 1 });
+  insert({ guest_key: 'g4', ts: T - 4 * 24 * HOUR, path: '/other' });
+
+  const fq = { sql: 'path = ?', args: ['/hot'] };
+  const t0 = performance.now();
+  assert.deepEqual(totalsFiltered(db, start, end, fq), { visits: 2, uniques: 2 });
+  const elapsed = performance.now() - t0;
+  assert.ok(
+    elapsed < 200,
+    `page-filtered totals must be an O(window) seek: took ${elapsed.toFixed(1)}ms with 40k out-of-window rows on the hot path`,
+  );
+
+  assert.deepEqual(topPagesFiltered(db, start, end, 5, fq), [{ path: '/hot', visits: 2, uniques: 2 }]);
+
+  const plan = db
+    .prepare(
+      `EXPLAIN QUERY PLAN
+       SELECT COUNT(*) AS visits, COUNT(DISTINCT guest_key) AS uniques
+       FROM events WHERE ts >= ? AND ts <= ? AND is_bot = 0 AND path = ?`,
+    )
+    .all(start, end, '/hot');
+  const detail = plan.map((r) => r.detail).join(' | ');
+  assert.match(
+    detail,
+    /idx_events_path_ts/,
+    `page-filtered reads must use the composite path+ts index, got: ${detail}`,
+  );
+  assert.doesNotMatch(
+    detail,
+    /idx_events_path \(path=\?\)/,
+    'planner must not fall back to a bare single-column path scan over full history',
+  );
+  db.close();
+});
+
 test('filtered daily/weekly/monthly series zero-fill their axes and honor the filter', () => {
   const { db, insert } = fresh();
   const fq = { sql: 'path = ?', args: ['/only'] };

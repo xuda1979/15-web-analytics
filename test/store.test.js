@@ -32,7 +32,7 @@ test('openDb seeds a fresh DB with all tables, indexes, meta and WAL', () => {
       assert.ok(tables.includes(t), `table ${t} exists`);
     }
     const indexNames = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%'").all().map((r) => r.name);
-    for (const ix of ['idx_events_ts', 'idx_events_guest', 'idx_events_path', 'idx_events_visit']) {
+    for (const ix of ['idx_events_ts', 'idx_events_guest', 'idx_events_path_ts', 'idx_events_visit']) {
       assert.ok(indexNames.includes(ix), `index ${ix} exists`);
     }
     const jm = db.prepare('PRAGMA journal_mode').get();
