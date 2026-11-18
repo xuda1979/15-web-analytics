@@ -85,7 +85,7 @@ test('generateAudit on a fresh DB emits the full clean-posture report', () => {
   assert.equal(report.stats.first_ts, null);
   assert.equal(report.stats.last_ts, null);
   assert.ok(report.stats.bytes > 0, 'dbstat reports real bytes on a fresh DB');
-  assert.equal(report.stats.bytes_readable, '52.0 KB', 'fmtBytes renders the dbstat total');
+  assert.equal(report.stats.bytes_readable, '56.0 KB', 'fmtBytes renders the dbstat total');
   assert.equal(report.stats.ip_rows, 0);
   assert.equal(report.stats.db_path, config.dbPath);
 

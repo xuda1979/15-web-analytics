@@ -69,6 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_events_ts     ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_guest  ON events(guest_key, ts);
 CREATE INDEX IF NOT EXISTS idx_events_path   ON events(path);
 CREATE INDEX IF NOT EXISTS idx_events_visit  ON events(visit_key);
+CREATE INDEX IF NOT EXISTS idx_agg_realtime_bucket ON agg_daily_realtime(bucket1m);
 `;
 
 // Full schema string (tables + indexes) for fresh installs and the audit report.

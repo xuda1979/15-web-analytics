@@ -20,6 +20,7 @@ import path from 'node:path';
 import { openDb } from '../src/store.js';
 import { loadOrCreateSecret } from '../src/privacy.js';
 import { insertEvent, normalizeEvent } from '../src/collector.js';
+import { config } from '../src/config.js';
 import {
   dayKeysBetween,
   dailySeriesFiltered,
@@ -363,6 +364,79 @@ test('realtime returns in-window minute buckets and clamps the window at both en
 test('realtime on an empty DB returns the zeroed empty form', () => {
   const { db } = fresh();
   assert.deepEqual(realtime(db, T + MIN), { buckets: [], current: { visits: 0, uniques: 0 } });
+});
+
+test('realtime read cost does not grow with the archive age of agg_daily_realtime', () => {
+  // Real-time polls filter on bucket1m ALONE, but the agg table's only index
+  // is the PK (day, bucket1m) — bucket1m is not a leftmost column there. With
+  // retention off (the default) the table grows ~1440 rows/active-day forever,
+  // so without a bucket1m index every dashboard poll full-scans years of
+  // minute buckets. Pin the fix: seed a multi-year history and require the
+  // query (a) to still return exactly the in-window buckets and (b) to run
+  // via an index seek, not a SCAN — plus a generous absolute budget so a
+  // planner regression (SCAN + temp b-tree over ~1.1M rows) cannot hide in an
+  // otherwise-correct result.
+  const { db, post } = fresh();
+  const DAY = 86_400_000;
+  const now = T + 5 * MIN;
+  const years = 3;
+  const rowsPerDay = 8 * 60; // 8 active hours/day
+  const base = now - years * 365 * DAY;
+
+  // Backfill the archive directly (bypass write-through) exactly as a long-
+  // lived deployment accumulates it: one row per active epoch-minute.
+  const upsert = db.prepare(
+    `INSERT INTO agg_daily_realtime(day, bucket1m, visits, uniques)
+     VALUES (?, ?, 1, 1)
+     ON CONFLICT(day, bucket1m) DO UPDATE SET visits = visits + 1`,
+  );
+  db.exec('BEGIN');
+  for (let d = 0; d < years * 365; d++) {
+    const dayStart = base + d * DAY;
+    const day = new Date(dayStart).toISOString().slice(0, 10);
+    for (let m = 0; m < rowsPerDay; m++) upsert.run(day, dayStart + m * MIN);
+  }
+  db.exec('COMMIT');
+  assert.equal(
+    db.prepare('SELECT COUNT(*) AS n FROM agg_daily_realtime').get().n,
+    years * 365 * rowsPerDay,
+    'archive seeded',
+  );
+
+  // In-window traffic (T+3m and T+4m, same spread as the window-clamp test).
+  post('/r1', { ts: T + 3 * MIN, ip: '10.0.0.1' });
+  post('/r2', { ts: T + 4 * MIN + 30_000, ip: '10.0.0.2' });
+
+  const t0 = performance.now();
+  const rt = realtime(db, now);
+  const elapsed = performance.now() - t0;
+
+  assert.deepEqual(
+    rt,
+    {
+      buckets: [
+        { ts: T + 3 * MIN, visits: 1, uniques: 1 },
+        { ts: T + 4 * MIN, visits: 1, uniques: 1 },
+      ],
+      current: { visits: 1, uniques: 1 },
+    },
+    'multi-year archive does not change the in-window result',
+  );
+
+  const plan = db
+    .prepare(
+      `EXPLAIN QUERY PLAN
+       SELECT bucket1m, SUM(visits) AS visits, SUM(uniques) AS uniques
+       FROM agg_daily_realtime WHERE bucket1m >= ? AND bucket1m <= ?
+       GROUP BY bucket1m ORDER BY bucket1m`,
+    )
+    .all(now - config.realtimeWindowMs, now);
+  const detail = plan.map((r) => r.detail).join(' | ');
+  assert.match(detail, /USING INDEX idx_agg_realtime_bucket/, `realtime must seek the bucket index, got: ${detail}`);
+  assert.ok(
+    elapsed < 50,
+    `realtime over a ${(years * 365 * rowsPerDay).toLocaleString()}-row archive should be an index seek (<50ms), took ${elapsed.toFixed(1)}ms`,
+  );
 });
 
 test('totals counts a range inclusive of end and never counts bots', () => {
