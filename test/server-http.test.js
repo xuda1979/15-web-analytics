@@ -44,7 +44,7 @@ after(async () => {
 function rawRequest(port, method, url, body, headers = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { host: '127.0.0.1', port, method, path: url, headers },
+      { host: '127.0.0.1', port, method, path: url, headers, agent: false },
       (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
@@ -71,7 +71,7 @@ function rawRequest(port, method, url, body, headers = {}) {
 function rawRequestCapture(port, method, url, body, headers = {}) {
   return new Promise((resolve) => {
     const req = http.request(
-      { host: '127.0.0.1', port, method, path: url, headers },
+      { host: '127.0.0.1', port, method, path: url, headers, agent: false },
       (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
@@ -105,7 +105,7 @@ function startStream(port, url) {
     resolveDone(v);
   };
   let settled = false;
-  const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: url }, (res) => {
+  const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: url, agent: false }, (res) => {
     const chunks = [];
     res.on('data', (c) => chunks.push(c));
     res.on('end', () => settle({ status: res.statusCode, text: () => Buffer.concat(chunks).toString('utf8') }));
@@ -589,7 +589,7 @@ test('export: a stalled client caps the server-side buffer (backpressure parks t
   // the pause is in effect; `done` resolves only when the header scan ends
   // (i.e. after the client resumes and the response fully drains).
   const res = await new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: url }, (r) => resolve(r));
+    const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: url, agent: false }, (r) => resolve(r));
     req.on('error', reject);
     req.end();
   });
@@ -661,7 +661,7 @@ test('export: a SQLite error after headers were sent truncates the connection in
       resolve(v);
     };
     const req = http.request(
-      { host: '127.0.0.1', port, method: 'GET', path: '/api/export?days=1' },
+      { host: '127.0.0.1', port, method: 'GET', path: '/api/export?days=1', agent: false },
       (res) => {
         res.on('data', () => {});
         res.on('end', () => settle({ status: res.statusCode, ended: true }));

@@ -70,6 +70,12 @@ export async function request(method, url, body, headers = {}) {
         method,
         path: url,
         headers: { 'content-type': 'application/json', ...headers },
+        // One connection per request: the shared default agent keeps completed
+        // sockets in a free pool with a keepAliveMsecs (1s) timeout whose
+        // expiry races a later request in suites where sibling tests run for
+        // >1s (long streaming exports), surfacing as a spurious client-side
+        // ECONNRESET. Closing per request keeps the suites deterministic.
+        agent: false,
       },
       (res) => {
         const chunks = [];
