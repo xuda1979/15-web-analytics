@@ -167,6 +167,29 @@ test('collect: malformed JSON yields a 400 bad-payload JSON response', async () 
   assert.deepEqual(res.json(), { ok: false, error: 'bad payload' });
 });
 
+test('collect: valid-JSON non-object bodies answer 400, not a leaked 500', async () => {
+  const { port, request } = await startServer();
+
+  // JSON.parse accepts null, primitives and arrays as well-formed documents,
+  // but the collect contract is a single object. Earlier the null body reached
+  // normalizeEvent() and threw "Cannot read properties of null" — surfacing as
+  // a misleading 500 internal plus a TypeError on stderr instead of the
+  // documented 400 bad-payload contract.
+  for (const body of ['null', '123', '"hi"', 'true', '[1,2,3]']) {
+    const res = await rawRequest(port, 'POST', '/api/collect', body, {
+      'content-type': 'application/json',
+      'x-forwarded-for': '203.0.113.7',
+      'user-agent': 'UA-NonObject',
+    });
+    assert.equal(res.status, 400, `${body} is rejected as a bad payload`);
+    assert.deepEqual(res.json(), { ok: false, error: 'bad payload' }, `${body} keeps the contract shape`);
+  }
+
+  const health = await request('GET', '/api/health');
+  assert.equal(health.status, 200, 'server survives every rejected non-object body');
+  assert.equal(health.json().ok, true);
+});
+
 test('collect: an empty body is read as {} and answered 204', async () => {
   const { request } = await startServer();
   const res = await request('POST', '/api/collect', undefined, {

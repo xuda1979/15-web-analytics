@@ -151,7 +151,16 @@ function readJsonBody(req, limitBytes = 4096) {
     req.on('end', () => {
       const raw = Buffer.concat(chunks).toString('utf8');
       try {
-        resolve(raw ? JSON.parse(raw) : {});
+        const parsed = raw ? JSON.parse(raw) : {};
+        // The collect contract is a single JSON object. Any other JSON shape
+        // (null, primitives, arrays) is a malformed payload: reject so the
+        // caller answers 400 instead of letting normalizeEvent() property-
+        // access a null and leak a TypeError as a misleading "internal" 500.
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          reject(new Error('invalid json'));
+          return;
+        }
+        resolve(parsed);
       } catch {
         reject(new Error('invalid json'));
       }
