@@ -24,8 +24,9 @@ local SQLite file, no third-party services.
   bounce rate, average visit duration, sources, devices, device models,
   browsers (with the dominant version, e.g. "Chrome 120"), countries, operating
   systems, visitor languages, screen sizes (top lists pair every visit count
-  with the distinct uniques behind it), visits by hour of day (UTC,
-  pageviews + distinct uniques per hour), referring pages, page titles, and
+  with the distinct uniques behind it), visits by hour of day (pageviews +
+  distinct uniques per hour; the axis follows `WA_HOUR_OFFSET_MIN`, default
+  UTC), referring pages, page titles, and
   entry/exit pages (each also paired with the distinct uniques landing on /
   leaving from it).
 - Real-time view (last 5 minutes, per-minute buckets) and day / week / month
@@ -152,13 +153,18 @@ oldest retained event so the manual-prune posture is visible.
 npm run check
 ```
 
-The acceptance suite boots the full server in-process against a temp SQLite
-database and asserts: cookie-less responses on every route, sub-second
-realtime visibility, the unique-visitor heuristic (2 simulated visitors across
-multiple pages), correct daily/weekly aggregation, referrer/device/browser
-reporting, page/source/device filters (including filtered series and filtered
-exports), CSV/JSON export with IP redaction, the privacy audit report, and the
-dashboard HTML.
+A `node --test` suite (249 tests) covering modules directly — config
+spellings and the db-path matrix, privacy key rotation and IP-redaction
+forms, rate limiting, retention pruning and cache rebuilds, the aggregations
+and filters, exporters, the collect/prune/audit handlers and CLI, the
+dashboard labels and bundled snippet — plus an in-process server suite that
+boots the full app against a temp SQLite database and asserts the acceptance
+criteria: cookie-less responses on every route, sub-second realtime
+visibility, the unique-visitor heuristic (2 simulated visitors across
+multiple pages), correct daily/weekly/monthly aggregation,
+referrer/device/browser reporting, page/source/device filters (including
+filtered series and filtered exports), CSV/JSON export with IP redaction,
+the privacy audit report, and the dashboard HTML.
 
 ## Deployment
 
