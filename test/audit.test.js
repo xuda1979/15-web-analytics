@@ -364,3 +364,30 @@ test('stats: a database larger than 1 MiB renders bytes_readable in MB', () => {
   assert.equal(byId.no_personal_fields.status, 'pass');
   assert.equal(report.pass_count, 7);
 });
+
+test('dbstat fallback: a build without the dbstat table degrades bytes to 0', () => {
+  // SQLite's dbstat virtual table is a compile-time option, absent from trimmed
+  // builds. generateAudit guards the SUM(pgsize) probe with a catch that must
+  // resolve the report to bytes: 0 (rendered '0 B') without collapsing any
+  // check — the no-such-table path (audit.js) had never been exercised.
+  const { db } = fresh();
+  const originalPrepare = db.prepare.bind(db);
+  mock.method(db, 'prepare', (sql) => {
+    if (String(sql).includes('dbstat')) {
+      return { get: () => { throw new Error('no such table: dbstat'); } };
+    }
+    return originalPrepare(sql);
+  });
+  try {
+    const report = generateAudit(db);
+    assert.equal(report.stats.bytes, 0, 'trimmed build: byte total degrades to 0');
+    assert.equal(report.stats.bytes_readable, '0 B', 'fmtBytes renders the 0-byte state');
+    assert.equal(report.checks.length, 7, 'the dbstat failure must not collapse the report');
+    assert.ok(report.checks.every((c) => c.status === 'pass'), 'clean posture holds without dbstat');
+    assert.equal(report.pass_count, 7);
+    assert.equal(report.warn_count, 0);
+  } finally {
+    mock.restoreAll();
+  }
+  db.close();
+});
