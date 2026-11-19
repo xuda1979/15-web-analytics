@@ -60,32 +60,44 @@ export function bucketMinutes(startMs, endMs) {
   return out;
 }
 
+// Shift an instant by the configured UTC offset before deriving calendar parts.
+// With WA_HOUR_OFFSET_MIN=480 (UTC+8) a 16:30 UTC event is "2026-11-11 00:30",
+// so day/week/month boundaries roll over at local midnight instead of 08:00
+// UTC. Read at call time (not import time) so tests can mutate the config and
+// existing installs pick up a new offset without a restart. Offset 0 keeps the
+// exact original UTC behavior.
+function shifted(ms) {
+  return new Date(ms + config.hourOffsetMin * 60_000);
+}
+
 export function dayKey(ms) {
-  const d = new Date(ms);
+  const d = shifted(ms);
   const s = (n) => String(n).padStart(2, '0');
   return `${d.getUTCFullYear()}-${s(d.getUTCMonth() + 1)}-${s(d.getUTCDate())}`;
 }
 
 export function monthKey(ms) {
-  const d = new Date(ms);
+  const d = shifted(ms);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
 export function monthStart(ms) {
-  // First day of the UTC month at midnight. Like weekStart, this value is a
-  // bucketing key: events from the same UTC month must share one aligned value.
-  const d = new Date(ms);
+  // First day of the (local, offset-adjusted) month at midnight. Like
+  // weekStart, this value is a bucketing key: events from the same local month
+  // must share one aligned value.
+  const d = shifted(ms);
   d.setUTCDate(1);
   d.setUTCHours(0, 0, 0, 0);
   return d;
 }
 
 export function weekStart(ms) {
-  // Monday-based at UTC midnight; weeks align to UTC not local DST.
+  // Monday-based at the (local, offset-adjusted) midnight; weeks align to that
+  // zone's calendar, not to a DST schedule (the offset is constant minutes).
   // Truncation matters: agg_monthly_buckets.start is a bucketing key, and
   // events from the same week must share one aligned start value even if they
   // arrive at different times of day.
-  const d = new Date(ms);
+  const d = shifted(ms);
   const day = d.getUTCDay() || 7; // Sun=7
   d.setUTCDate(d.getUTCDate() - day + 1);
   d.setUTCHours(0, 0, 0, 0);

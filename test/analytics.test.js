@@ -17,12 +17,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { openDb } from '../src/store.js';
+import { openDb, weekStart } from '../src/store.js';
 import { loadOrCreateSecret } from '../src/privacy.js';
 import { insertEvent, normalizeEvent } from '../src/collector.js';
 import { config } from '../src/config.js';
 import {
   dayKeysBetween,
+  dailySeries,
+  weeklySeries,
+  monthlySeries,
   dailySeriesFiltered,
   weeklySeriesFiltered,
   monthlySeriesFiltered,
@@ -378,6 +381,86 @@ test('hourlySeries honors config.hourOffsetMin when shifting hour buckets', () =
         { hour: 11, visits: 1, uniques: 1 },
       ],
       'hourlySeriesFiltered shifts with the same offset',
+    );
+  } finally {
+    config.hourOffsetMin = saved;
+  }
+});
+
+test('day/week/month series shift their axes and labels with the configured offset', () => {
+  const { db, post } = fresh();
+  const saved = config.hourOffsetMin;
+  try {
+    config.hourOffsetMin = 480; // UTC+8
+    // 2026-11-10 15:59 UTC is the 10th local-day-dawn instant; 16:00 UTC is
+    // 2026-11-11 00:00 local. @a lands Tue Nov 10 23:59 local, @b lands the
+    // following local day 00:00 — the local-day boundary sits at 16:00 UTC.
+    // Both are also in local November, and both fall in the same local week
+    // Mon 2026-11-09 .. Sun 2026-11-15 (T = Nov 10 09:00 UTC is Tue local).
+    const justBeforeMidnight = Date.UTC(2026, 10, 10, 15, 59);
+    const atMidnight = Date.UTC(2026, 10, 10, 16, 0);
+
+    post('/a', { ts: justBeforeMidnight });
+    post('/b', { ts: atMidnight });
+
+    // dayKeysBetween: two adjacent local days from instants 1 minute apart.
+    assert.deepEqual(
+      dayKeysBetween(justBeforeMidnight, atMidnight),
+      ['2026-11-10', '2026-11-11'],
+      'the local-day boundary sits at 16:00 UTC for UTC+8',
+    );
+
+    // dailySeries reads the write-through agg cache (dayKey at insert time).
+    // The 2nd local day's key is Nov 11, so the full 2-key axis has 1 visit each.
+    assert.deepEqual(
+      dailySeries(db, justBeforeMidnight - 10 * MIN, atMidnight + 10 * MIN).map((d) => [d.date, d.visits]),
+      [
+        ['2026-11-10', 1],
+        ['2026-11-11', 1],
+      ],
+    );
+
+    // weeklySeries: the local week's Monday-dawn key is Nov 9 (in shifted-label
+    // space, so weekStart itself returns Nov 9 00:00Z with the offset active).
+    // Cap the range 1ms before the *next* local Monday dawn (Nov 16) so the
+    // axis is exactly [Nov 9]; both events land in that local week. Note the
+    // bound must be computed with weekStart, whose value depends on the offset.
+    const weekEnd = weekStart(Date.UTC(2026, 10, 16, 0, 0)).getTime() - 1;
+    const weekly = weeklySeries(db, weekStart(justBeforeMidnight - 10 * MIN).getTime(), weekEnd);
+    assert.equal(weekly.length, 1);
+    assert.deepEqual(weekly.map((w) => [w.week, w.visits]), [
+      ['2026-11-09', 2],
+    ], 'local-week bucket aggregates both events under the local Monday label');
+
+    // monthlySeries: the axis keys come from monthStartsBetween, which must
+    // step month boundaries in the same shifted-label space the collector
+    // writes to agg_monthly_buckets.start (this regressed: a double-applied
+    // offset produced a Nov 30 16:00Z 'Dec' key that missed the cache row).
+    const monthly = monthlySeries(db, Date.UTC(2026, 10, 10), Date.UTC(2026, 11, 10, 0, 0));
+    assert.deepEqual(monthly.map((m) => [m.month, m.visits]), [
+      ['2026-11', 2],
+      ['2026-12', 0],
+    ]);
+
+    // The filtered variants must compute the same local buckets from raw rows.
+    const fqs = { sql: 'path LIKE ?', args: ['/%'] };
+    assert.deepEqual(
+      dailySeriesFiltered(db, justBeforeMidnight - 10 * MIN, atMidnight + 10 * MIN, fqs).map((d) => [d.date, d.visits]),
+      [
+        ['2026-11-10', 1],
+        ['2026-11-11', 1],
+      ],
+    );
+    assert.deepEqual(
+      weeklySeriesFiltered(db, weekStart(justBeforeMidnight - 10 * MIN).getTime(), weekEnd, fqs).map((w) => [w.week, w.visits]),
+      [['2026-11-09', 2]],
+    );
+    assert.deepEqual(
+      monthlySeriesFiltered(db, Date.UTC(2026, 10, 10), Date.UTC(2026, 11, 10, 0, 0), fqs).map((m) => [m.month, m.visits]),
+      [
+        ['2026-11', 2],
+        ['2026-12', 0],
+      ],
     );
   } finally {
     config.hourOffsetMin = saved;

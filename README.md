@@ -106,7 +106,7 @@ All settings are environment variables:
 | `WA_HASH_SALT` | unset | Optional seed for the first-time secret in `data/.wa_secret`: when set, the generated secret is `sha256(WA_HASH_SALT)` instead of random, so a recreated data dir derives the same keys. Ignored once the secret exists — hashes are stable across restarts because the secret persists |
 | `WA_VISIT_WINDOW_MS` | `1800000` (30m) | Unique-visitor heuristic window |
 | `WA_REALTIME_WINDOW_MS` | `300000` (5m) | Realtime window |
-| `WA_HOUR_OFFSET_MIN` | `0` | Minutes ahead of UTC for the hour-of-day activity axis; negative for zones west of UTC (e.g. `-300` = US Eastern). `0` = UTC |
+| `WA_HOUR_OFFSET_MIN` | `0` | Minutes ahead of UTC for the hour-of-day activity axis; negative for zones west of UTC (e.g. `-300` = US Eastern). `0` = UTC. Also shifts the day/week/month bucketing: charts and labels roll over at configured local midnight instead of UTC |
 | `WA_COLLECT_RATE_LIMIT` | `60` | Max collect POSTs per IP per rate window (`0` disables) |
 | `WA_COLLECT_RATE_WINDOW_MS` | `60000` | Rate-limit window for collect |
 | `WA_STORE_IP` | `0` | Set `1` to store cleartext IPs (audit flags this) |

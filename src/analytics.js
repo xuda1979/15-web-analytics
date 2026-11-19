@@ -1,17 +1,38 @@
 // Read-side analytics: time series, top lists, entry/exit, realtime, and CSV.
 
 import { config } from './config.js';
-import { dayKey, weekStart } from './store.js';
+import { dayKey, monthStart, weekStart } from './store.js';
 
 export function dayKeysBetween(startMs, endMs) {
   const keys = [];
-  const cur = new Date(startMs);
+  // The offset is a constant number of minutes, so local days are exactly 24h
+  // apart; floor the shifted instant to local midnight then step whole days.
+  const cur = new Date(startMs + config.hourOffsetMin * 60_000);
   cur.setUTCHours(0, 0, 0, 0);
-  while (cur.getTime() <= endMs) {
-    keys.push(dayKey(cur.getTime()));
-    cur.setUTCDate(cur.getUTCDate() + 1);
+  let t = cur.getTime() - config.hourOffsetMin * 60_000;
+  while (t <= endMs) {
+    keys.push(dayKey(t));
+    t += 24 * 3600 * 1000;
   }
   return keys;
+}
+
+// Local-month start instants covering [startMs, endMs], aligned to the
+// configured UTC offset (monthStart). monthStart already returns the key in
+// shifted-label space, so stepping here stays in that same space: advance the
+// shifted calendar month with setUTCMonth(+1) (no offset re-apply), matching
+// the keys the collector writes to agg_monthly_buckets.start.
+function monthStartsBetween(startMs, endMs) {
+  const out = [];
+  let t = monthStart(startMs).getTime();
+  while (t <= endMs) {
+    out.push(t);
+    const d = new Date(t);
+    d.setUTCMonth(d.getUTCMonth() + 1, 1);
+    d.setUTCHours(0, 0, 0, 0);
+    t = d.getTime();
+  }
+  return out;
 }
 
 // Ranges are upper-bound INCLUSIVE. The common dashboard query sets end to
@@ -51,10 +72,11 @@ export function weeklySeries(db, startMs, endMs) {
   const weeks = [];
   for (let t = sm; t <= em; t += 7 * 24 * 3600 * 1000) weeks.push(t);
   const byStart = new Map(rows.map((r) => [r.start, r]));
+  const off = config.hourOffsetMin * 60_000;
   return weeks.map((t) => {
     const r = byStart.get(t);
     return {
-      week: new Date(t).toISOString().slice(0, 10),
+      week: new Date(t + off).toISOString().slice(0, 10),
       start: t,
       visits: r ? Number(r.visits) : 0,
       uniques: r ? Number(r.uniques) : 0,
@@ -63,30 +85,20 @@ export function weeklySeries(db, startMs, endMs) {
 }
 
 export function monthlySeries(db, startMs, endMs) {
-  const sm = new Date(startMs);
-  sm.setUTCDate(1);
-  sm.setUTCHours(0, 0, 0, 0);
-  const em = endMs;
+  const months = monthStartsBetween(startMs, endMs);
   const rows = db
     .prepare(
       `SELECT start, SUM(visits) AS visits, SUM(uniques) AS uniques
        FROM agg_monthly_buckets WHERE bucket='month' AND start >= ? AND start <= ?
        GROUP BY start ORDER BY start`,
     )
-    .all(sm.getTime(), em);
-  const months = [];
-  for (let t = sm.getTime(); t <= em;) {
-    months.push(t);
-    const d = new Date(t);
-    d.setUTCMonth(d.getUTCMonth() + 1, 1);
-    d.setUTCHours(0, 0, 0, 0);
-    t = d.getTime();
-  }
+    .all(months[0] ?? startMs, endMs);
   const byStart = new Map(rows.map((r) => [r.start, r]));
+  const off = config.hourOffsetMin * 60_000;
   return months.map((t) => {
     const r = byStart.get(t);
     return {
-      month: new Date(t).toISOString().slice(0, 7),
+      month: new Date(t + off).toISOString().slice(0, 7),
       start: t,
       visits: r ? Number(r.visits) : 0,
       uniques: r ? Number(r.uniques) : 0,
@@ -470,7 +482,7 @@ export function dailySeriesFiltered(db, startMs, endMs, fq) {
   const days = dayKeysBetween(startMs, endMs);
   const rows = db
     .prepare(
-      `SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS d,
+      `SELECT strftime('%Y-%m-%d', (ts + ${config.hourOffsetMin} * 60000) / 1000, 'unixepoch') AS d,
               COUNT(*) AS visits,
               COUNT(DISTINCT guest_key) AS uniques
        FROM events
@@ -486,10 +498,14 @@ export function dailySeriesFiltered(db, startMs, endMs, fq) {
 }
 
 export function weeklySeriesFiltered(db, startMs, endMs, fq) {
+  // Monday of the offset-adjusted week, computed from the shifted SQL value so
+  // events across a local-midnight boundary land in the same local week the
+  // unfiltered cache (weekStart) groups them under.
   const rows = db
     .prepare(
       `SELECT strftime('%Y-%m-%d',
-                      (ts / 1000 - ((strftime('%w', ts / 1000, 'unixepoch') + 6) % 7) * 86400),
+                      ((ts + ${config.hourOffsetMin} * 60000) / 1000 -
+                       (((strftime('%w', (ts + ${config.hourOffsetMin} * 60000) / 1000, 'unixepoch') + 6) % 7)) * 86400),
                       'unixepoch') AS wk,
               COUNT(*) AS visits,
               COUNT(DISTINCT guest_key) AS uniques
@@ -502,8 +518,9 @@ export function weeklySeriesFiltered(db, startMs, endMs, fq) {
   const weeks = [];
   for (let t = sm; t <= endMs; t += 7 * 24 * 3600 * 1000) weeks.push(t);
   const byKey = new Map(rows.map((r) => [r.wk, r]));
+  const off = config.hourOffsetMin * 60_000;
   return weeks.map((t) => {
-    const key = new Date(t).toISOString().slice(0, 10);
+    const key = new Date(t + off).toISOString().slice(0, 10);
     const r = byKey.get(key);
     return { week: key, start: t, visits: r ? Number(r.visits) : 0, uniques: r ? Number(r.uniques) : 0 };
   });
@@ -512,7 +529,7 @@ export function weeklySeriesFiltered(db, startMs, endMs, fq) {
 export function monthlySeriesFiltered(db, startMs, endMs, fq) {
   const rows = db
     .prepare(
-      `SELECT strftime('%Y-%m', ts / 1000, 'unixepoch') AS mo,
+      `SELECT strftime('%Y-%m', (ts + ${config.hourOffsetMin} * 60000) / 1000, 'unixepoch') AS mo,
               COUNT(*) AS visits,
               COUNT(DISTINCT guest_key) AS uniques
        FROM events
@@ -520,20 +537,11 @@ export function monthlySeriesFiltered(db, startMs, endMs, fq) {
        GROUP BY mo ORDER BY mo`,
     )
     .all(startMs, endMs, ...fq.args);
-  const sm = new Date(startMs);
-  sm.setUTCDate(1);
-  sm.setUTCHours(0, 0, 0, 0);
-  const months = [];
-  for (let t = sm.getTime(); t <= endMs;) {
-    months.push(t);
-    const d = new Date(t);
-    d.setUTCMonth(d.getUTCMonth() + 1, 1);
-    d.setUTCHours(0, 0, 0, 0);
-    t = d.getTime();
-  }
+  const months = monthStartsBetween(startMs, endMs);
   const byKey = new Map(rows.map((r) => [r.mo, r]));
+  const off = config.hourOffsetMin * 60_000;
   return months.map((t) => {
-    const key = new Date(t).toISOString().slice(0, 7);
+    const key = new Date(t + off).toISOString().slice(0, 7);
     const r = byKey.get(key);
     return { month: key, start: t, visits: r ? Number(r.visits) : 0, uniques: r ? Number(r.uniques) : 0 };
   });

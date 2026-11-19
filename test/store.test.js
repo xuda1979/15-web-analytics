@@ -15,6 +15,7 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   openDb, bucketMinutes, dayKey, monthKey, monthStart, weekStart, iso,
 } from '../src/store.js';
+import { config } from '../src/config.js';
 
 // 2026-11-10 09:00 UTC is a Tuesday.
 const T = Date.UTC(2026, 10, 10, 9, 0);
@@ -100,6 +101,32 @@ test('weekStart aligns every event of a week to Monday 00:00 UTC', () => {
   assert.equal(weekStart(Date.UTC(2026, 10, 15, 23, 59)).toISOString(), '2026-11-09T00:00:00.000Z', 'Sunday still belongs to the Monday-starting week');
   // January: 2027-01-01 is a Friday whose Monday is 2026-12-28 (previous year).
   assert.equal(weekStart(Date.UTC(2027, 0, 1)).toISOString(), '2026-12-28T00:00:00.000Z');
+});
+
+test('dayKey/monthKey/monthStart/weekStart honor config.hourOffsetMin (read at call time)', () => {
+  const saved = config.hourOffsetMin;
+  try {
+    config.hourOffsetMin = 480; // UTC+8: day/month/week roll at local midnight (16:00 UTC)
+    assert.equal(dayKey(Date.UTC(2026, 10, 10, 15, 59)), '2026-11-10', '23:59 local');
+    assert.equal(dayKey(Date.UTC(2026, 10, 10, 16, 0)), '2026-11-11', '00:00 local = 16:00 UTC');
+    assert.equal(monthKey(Date.UTC(2026, 10, 30, 15, 59)), '2026-11', '23:59 local keeps the month');
+    assert.equal(monthKey(Date.UTC(2026, 10, 30, 16, 0)), '2026-12', 'month rolls at 16:00 UTC');
+    // The offset helpers return bucket keys whose ISO string reads as the local
+    // calendar midnight (labels derive from them via +off), so the shifted
+    // local-Nov 1 key is 2026-11-01T00:00:00Z.
+    assert.equal(monthStart(Date.UTC(2026, 10, 10, 9, 0)).toISOString(), '2026-11-01T00:00:00.000Z', 'local Nov 1 midnight key');
+    // T = Nov 10 09:00 UTC = Nov 10 17:00 local (a Tuesday); the local week
+    // started on Monday Nov 9.
+    assert.equal(weekStart(Date.UTC(2026, 10, 10, 9, 0)).toISOString(), '2026-11-09T00:00:00.000Z', 'local Monday Nov 9 midnight key');
+
+    config.hourOffsetMin = -300; // US Eastern (UTC-5): boundaries roll *before* UTC
+    assert.equal(dayKey(Date.UTC(2026, 10, 10, 4, 0)), '2026-11-09', '23:00 ET on Nov 9');
+    assert.equal(dayKey(Date.UTC(2026, 10, 10, 5, 0)), '2026-11-10', '00:00 ET = 05:00 UTC');
+    assert.equal(monthStart(Date.UTC(2026, 11, 1, 5, 0)).toISOString(), '2026-12-01T00:00:00.000Z', 'local Dec 1 midnight key');
+    assert.equal(weekStart(Date.UTC(2026, 10, 12, 5, 0)).toISOString(), '2026-11-09T00:00:00.000Z', 'local Monday Nov 9 midnight key');
+  } finally {
+    config.hourOffsetMin = saved;
+  }
 });
 
 test("iso renders whole seconds with a trailing Z (analytics' timestamps)", () => {
