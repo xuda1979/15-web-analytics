@@ -72,6 +72,7 @@ test('referrerDomain returns the www-less host or null', () => {
   assert.equal(referrerDomain(''), null);
   assert.equal(referrerDomain(null), null);
   assert.equal(referrerDomain('not a url'), null);
+  assert.equal(referrerDomain('about:blank'), null, 'scheme-only referrers parse but have an empty hostname');
 });
 
 test('normalizeEvent truncates long fields and clamps integers', () => {

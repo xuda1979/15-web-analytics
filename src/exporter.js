@@ -83,7 +83,6 @@ export function* exportEventsIter(db, startMs, endMs, fq) {
       ORDER BY ts`,
   );
   for (const r of stmt.iterate(startMs, endMs, ...(fq ? fq.args : []))) {
-    if (!r) continue;
     yield {
       ...r,
       visitsSerial: Number(r.visitsSerial || r.id),
