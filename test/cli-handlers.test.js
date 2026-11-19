@@ -108,6 +108,89 @@ test('seed: stays inside the seeded range and populates breakdown dimensions', (
   }
 });
 
+test('seed: verbose flag logs the deterministic event count and bot total', () => {
+  const { db, restore } = fresh();
+  try {
+    const logs = [];
+    const original = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    let n;
+    try {
+      n = seed(db, { days: 7, visitors: 3, verbose: true });
+    } finally {
+      console.log = original;
+    }
+    assert.equal(logs.length, 1, 'no other console output on the verbose path');
+    assert.match(logs[0], /^seeded \d+ real events \+ 2 bots over 7 days$/, 'echoes count, bot total and window');
+    assert.ok(logs[0].startsWith(`seeded ${n} real events`), 'logged count matches the returned determinstic count');
+  } finally {
+    restore();
+    db.close();
+  }
+});
+
+test('collectOnce: honors --ip/--ua/--referrer overrides and derives guest key from them', () => {
+  const { db, restore } = fresh();
+  try {
+    const logs = [];
+    const original = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    try {
+      collectOnce(db, [
+        '--path=/cli-ipua',
+        '--ip=203.0.113.7',
+        '--ua=Mozilla/5.0 (X11; Linux x86_64) styled/2.0',
+        '--referrer=https://www.example.org/deep/link?q=1',
+        '--title=IP UA Test',
+      ]);
+    } finally {
+      console.log = original;
+    }
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /^collect: id=\d+ path=\/cli-ipua unique=true$/, 'echoes id, path and uniqueness');
+
+    const row = db.prepare('SELECT * FROM events WHERE path = ?').get('/cli-ipua');
+    assert.ok(row, 'event row inserted');
+    assert.equal(row.ip, null, 'WA_STORE_IP defaults off: the override feeds the guest key, the row stores null');
+    assert.equal(row.ua, 'Mozilla/5.0 (X11; Linux x86_64) styled/2.0', '--ua override lands in the row');
+    assert.equal(row.ref_domain, 'example.org', 'referrer host extracted with the www. prefix stripped');
+    assert.equal(row.is_bot, 0, 'a custom UA is not a bot');
+    assert.equal(row.guest_key, hashGuest('203.0.113.7', 'Mozilla/5.0 (X11; Linux x86_64) styled/2.0', loadOrCreateSecret(config.dataDir)),
+      'guest key derived from the overridden ip/ua, not the cli defaults');
+  } finally {
+    restore();
+    db.close();
+  }
+});
+
+test('collectOnce: defaults apply when flags are omitted', () => {
+  const { db, restore } = fresh();
+  try {
+    const logs = [];
+    const original = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    try {
+      collectOnce(db, []);
+    } finally {
+      console.log = original;
+    }
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /^collect: id=\d+ path=\/ unique=true$/, 'defaults to / when --path is missing');
+
+    const row = db.prepare('SELECT path, referrer, ref_domain, title, lang, ip, ua FROM events ORDER BY id DESC LIMIT 1').get();
+    assert.equal(row.path, '/', 'path defaults to /');
+    assert.equal(row.referrer, '', 'referrer defaults to empty string');
+    assert.equal(row.ref_domain, null, 'empty referrer yields no ref domain');
+    assert.equal(row.title, '', 'title defaults to empty');
+    assert.equal(row.lang, '', 'lang defaults to empty');
+    assert.equal(row.ip, null, 'ip defaults to the cli/1.0 identity, redacted when WA_STORE_IP is off');
+    assert.equal(row.ua, 'cli/1.0', 'ua defaults to cli/1.0');
+  } finally {
+    restore();
+    db.close();
+  }
+});
+
 test('collectOnce: records a normalized event with parsed flags and echoes unique=true', () => {
   const { db, restore } = fresh();
   try {
