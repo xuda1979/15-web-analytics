@@ -391,3 +391,95 @@ test('dbstat fallback: a build without the dbstat table degrades bytes to 0', ()
   }
   db.close();
 });
+
+test('no_cookies fails when cookie/localStorage machinery ships in the collect snippet', () => {
+  // cookieEvidence() (audit.js) scans the shipped snippet for document.cookie /
+  // localStorage writes and the server source for Set-Cookie. The clean report
+  // covers the pass side; this is the violation side — a snippet that reads a
+  // cookie must flip no_cookies to fail at report time, not assert the claim
+  // in prose. A <1KB sabotaged snippet keeps snippet_size on the pass branch
+  // so the gate pins exactly which check the violation fails.
+  const { db } = fresh();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-cookiehit-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'wa.js'), "document.cookie = 'wa-user=abc123';\n");
+    const report = withCfg({ publicDir: dir }, () => generateAudit(db));
+    const byId = Object.fromEntries(report.checks.map((c) => [c.id, c]));
+    assert.equal(byId.no_cookies.status, 'fail', 'cookie read in the snippet flips the gate');
+    assert.match(byId.no_cookies.detail, /Cookie\/local-storage machinery found/, 'fail detail names the machinery');
+    assert.match(byId.no_cookies.detail, /collect snippet:1:/, 'hit cites the snippet file and line');
+    assert.match(byId.no_cookies.detail, /document\.cookie/, 'hit quotes the offending API use');
+    assert.equal(byId.snippet_size.status, 'pass', 'the 36-byte snippet is within the ~1KB budget');
+    assert.equal(report.checks.length, 7, 'the violation must not collapse the report');
+    assert.equal(report.pass_count, 6, 'only no_cookies fails');
+    assert.equal(report.warn_count, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  db.close();
+});
+
+test('local_storage fails when an outbound transmission primitive ships in server source', () => {
+  // outboundEvidence() (audit.js) scans the shipped src tree for fetch /
+  // https.request / net sockets / dgram / WebSocket / child_process /
+  // sendBeacon / XHR. Two primitives in one module exercise both the fail
+  // branch and the plural hit rendering (audit.js: `primitive${hits>1?'s':''}`).
+  // Runs against a throwaway COPY of src (opts.srcDir) so the live tree is
+  // never touched; a non-.js file in the copy covers the scanners'
+  // extension-skip branch.
+  const { db } = fresh();
+  const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-outbound-'));
+  const work = path.join(workRoot, 'src');
+  try {
+    fs.cpSync(path.join(import.meta.dirname, '..', 'src'), work, { recursive: true });
+    fs.writeFileSync(
+      path.join(work, 'exfil.js'),
+      "const spawn = require('child_process').spawn;\n" +
+        "const res = await fetch('https://example.com/ping');\n",
+    );
+    fs.writeFileSync(path.join(work, 'note.txt'), 'not a js module\n');
+    const report = generateAudit(db, { srcDir: work });
+    const byId = Object.fromEntries(report.checks.map((c) => [c.id, c]));
+    assert.equal(byId.local_storage.status, 'fail', 'an outbound fetch flips the locality gate');
+    assert.match(byId.local_storage.detail, /Outbound-transmission primitives found/, 'plural rendering for 2 hits');
+    assert.match(byId.local_storage.detail, /exfil\.js:1:/, 'first hit cites file:line');
+    assert.match(byId.local_storage.detail, /exfil\.js:2:/, 'second hit cites file:line');
+    assert.equal(report.checks.length, 7);
+    assert.equal(report.pass_count, 6, 'only local_storage fails');
+    assert.equal(report.warn_count, 0);
+  } finally {
+    fs.rmSync(workRoot, { recursive: true, force: true });
+  }
+  db.close();
+});
+
+test('region_only fails when precise-geolocation machinery ships in server source', () => {
+  // regionEvidence() (audit.js) scans for geoip/maxmind/ipinfo/latitude/
+  // longitude etc. The product's only region signal is the optional x-country
+  // header read at collect time; a module that resolves IPs to coordinates
+  // must flip region_only to fail at report time.
+  const { db } = fresh();
+  const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-geo-'));
+  const work = path.join(workRoot, 'src');
+  try {
+    fs.cpSync(path.join(import.meta.dirname, '..', 'src'), work, { recursive: true });
+    fs.writeFileSync(
+      path.join(work, 'geo.js'),
+      "const loc = await ipinfo.lookup(remoteAddress);\n" +
+        'return loc.latitude + \',\' + loc.longitude;\n',
+    );
+    const report = generateAudit(db, { srcDir: work });
+    const byId = Object.fromEntries(report.checks.map((c) => [c.id, c]));
+    assert.equal(byId.region_only.status, 'fail', 'geo lookup machinery flips the gate');
+    assert.match(byId.region_only.detail, /Precise-geolocation machinery found/, 'fail detail names the violation class');
+    assert.match(byId.region_only.detail, /geo\.js:1:/, 'hit cites file:line');
+    assert.equal(byId.local_storage.status, 'pass', 'the geo module tripped no outbound primitive');
+    assert.equal(byId.no_cookies.status, 'pass', 'the geo module tripped no cookie machinery');
+    assert.equal(report.checks.length, 7);
+    assert.equal(report.pass_count, 6, 'only region_only fails');
+    assert.equal(report.warn_count, 0);
+  } finally {
+    fs.rmSync(workRoot, { recursive: true, force: true });
+  }
+  db.close();
+});
