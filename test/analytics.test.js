@@ -387,6 +387,45 @@ test('hourlySeries honors config.hourOffsetMin when shifting hour buckets', () =
   }
 });
 
+test('hourlySeries shifts by a fractional west-zone offset (UTC-5:30) with midnight wrap', () => {
+  const { db, post } = fresh();
+  const saved = config.hourOffsetMin;
+  try {
+    config.hourOffsetMin = -330; // UTC-5:30, e.g. Venezuela/Newfoundland style
+    // 00:10 UTC wraps backward past local midnight to 18:40 the previous local
+    // day, 03:30 UTC lands 22:00 local, 05:00 UTC lands 23:30 local.
+    post('/w1', { ts: Date.UTC(2026, 10, 10, 0, 10), ip: '10.0.0.1' });
+    post('/w2', { ts: Date.UTC(2026, 10, 10, 3, 30), ip: '10.0.0.2' });
+    post('/w3', { ts: Date.UTC(2026, 10, 10, 5, 0), ip: '10.0.0.3' });
+
+    const series = hourlySeries(db, Date.UTC(2026, 10, 10, 0, 0), Date.UTC(2026, 10, 10, 6, 0));
+    assert.equal(series.length, 24);
+    assert.deepEqual(
+      series.filter((s) => s.visits > 0).map((s) => s),
+      [
+        { hour: 18, visits: 1, uniques: 1 },
+        { hour: 22, visits: 1, uniques: 1 },
+        { hour: 23, visits: 1, uniques: 1 },
+      ],
+      'hour buckets land in UTC-5:30 local hours; local midnight wraps the 00:10 UTC event to hour 18',
+    );
+
+    // The filtered variant must shift identically, including the wrap.
+    const fqs = { sql: '1 = 1', args: [] };
+    assert.deepEqual(
+      hourlySeriesFiltered(db, Date.UTC(2026, 10, 10, 0, 0), Date.UTC(2026, 10, 10, 6, 0), fqs).filter((s) => s.visits > 0),
+      [
+        { hour: 18, visits: 1, uniques: 1 },
+        { hour: 22, visits: 1, uniques: 1 },
+        { hour: 23, visits: 1, uniques: 1 },
+      ],
+      'hourlySeriesFiltered wraps midnight identically at a fractional west offset',
+    );
+  } finally {
+    config.hourOffsetMin = saved;
+  }
+});
+
 test('day/week/month series shift their axes and labels with the configured offset', () => {
   const { db, post } = fresh();
   const saved = config.hourOffsetMin;
