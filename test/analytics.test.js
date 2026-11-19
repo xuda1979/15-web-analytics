@@ -506,6 +506,13 @@ test('day/week/month series shift their axes and labels with the configured offs
   }
 });
 
+test('monthlySeries over a range that starts inside its own month and ends before it returns the empty axis', () => {
+  const { db } = fresh();
+  // endMs is before the 1st of T's month, so monthStartsBetween yields nothing
+  // and the months[0] ?? startMs fallback must supply the bare-query start.
+  assert.deepEqual(monthlySeries(db, T, Date.UTC(2026, 9, 31, 23, 59, 59, 999)), []);
+});
+
 test('realtime returns in-window minute buckets and clamps the window at both ends', () => {
   const { db, post } = fresh();
   const now = T + 5 * MIN;
@@ -668,6 +675,16 @@ test('totals counts a range inclusive of end and never counts bots', () => {
 
   assert.deepEqual(totals(db, T, T + 2 * MIN), { visits: 3, uniques: 2 });
   assert.deepEqual(totalsFiltered(db, T, T + 2 * MIN, { sql: 'path = ?', args: ['/a'] }), { visits: 1, uniques: 1 });
+});
+
+test('totalsFiltered returns the zeroed form when the range has no matching rows', () => {
+  const { db, post } = fresh();
+  post('/a', { ts: T });
+  // A filter that matches nothing inside the range must fall through to the
+  // COUNT(DISTINCT guest_key) = NULL row and the row?.x || 0 normalization.
+  assert.deepEqual(totalsFiltered(db, T, T + SPAN, { sql: 'path = ?', args: ['/missing'] }), { visits: 0, uniques: 0 });
+  // A range entirely outside the data is equally empty.
+  assert.deepEqual(totalsFiltered(db, T + 30 * MIN, T + 31 * MIN, { sql: 'path = ?', args: ['/a'] }), { visits: 0, uniques: 0 });
 });
 
 test('visitStats splits sessions by visit_key and computes bounce rate and duration', () => {

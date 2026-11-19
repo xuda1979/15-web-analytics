@@ -180,7 +180,7 @@ function attachBrowserVersions(db, rows, startMs, endMs, extraSql, extraArgs) {
          AND browser_version IS NOT NULL AND browser_version != ''
        GROUP BY browser, bv ORDER BY c DESC, bv`,
     )
-    .all(startMs, endMs, ...names, ...(extraArgs || []));
+    .all(startMs, endMs, ...names, ...extraArgs);
   const best = new Map();
   for (const v of versionRows) if (!best.has(v.browser)) best.set(v.browser, v.bv);
   return rows.map((r) => ({ ...r, version: best.get(r.browser) || null }));
