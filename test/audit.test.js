@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { tmpdir } from './helpers.js';
 import { openDb } from '../src/store.js';
 import { config } from '../src/config.js';
 import { SCHEMA } from '../src/schema.js';
@@ -29,7 +30,7 @@ const DAY = 24 * 3600 * 1000;
 const LAST_PRUNE = '2026-11-10T00:00:00.000Z';
 
 function fresh() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-aud-'));
+  const dir = tmpdir();
   const db = openDb(path.join(dir, 'test.sqlite'));
   const stmt = db.prepare(
     `INSERT INTO events (ts, visited_at, guest_key, ua, path, is_bot, ip)

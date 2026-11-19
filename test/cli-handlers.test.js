@@ -8,10 +8,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { tmpdir } from './helpers.js';
 import { openDb } from '../src/store.js';
 import { loadOrCreateSecret, hashGuest } from '../src/privacy.js';
 import { config } from '../src/config.js';
@@ -21,7 +20,7 @@ import { totals, dailySeries, weeklySeries, monthlySeries } from '../src/analyti
 const DAY = 86_400_000;
 
 function fresh() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-cli-'));
+  const dir = tmpdir();
   const db = openDb(path.join(dir, 'test.sqlite'));
   const secret = loadOrCreateSecret(dir);
   const prevDir = config.dataDir;

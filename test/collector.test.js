@@ -10,10 +10,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { tmpdir } from './helpers.js';
 import { config } from '../src/config.js';
 import { openDb } from '../src/store.js';
 import { loadOrCreateSecret } from '../src/privacy.js';
@@ -27,7 +26,7 @@ const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) ' +
   'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 
 function fresh() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-col-'));
+  const dir = tmpdir();
   const db = openDb(path.join(dir, 'test.sqlite'));
   const secret = loadOrCreateSecret(dir);
   const post = (pathname, meta = {}) => {

@@ -3,17 +3,16 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { tmpdir } from './helpers.js';
 import { openDb, monthStart } from '../src/store.js';
 import { loadOrCreateSecret } from '../src/privacy.js';
 import { insertEvent, normalizeEvent } from '../src/collector.js';
 import { monthlySeries, monthlySeriesFiltered } from '../src/analytics.js';
 
 function fresh() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-mon-'));
+  const dir = tmpdir();
   const db = openDb(path.join(dir, 'test.sqlite'));
   const secret = loadOrCreateSecret(dir);
   return { db, secret };

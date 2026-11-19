@@ -1,13 +1,28 @@
 // Shared test helpers: boot the server in-process on an ephemeral port with a
 // temp DB directory, and provide an HTTP client.
 
+import { after } from 'node:test';
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Every temp dir handed out here is tracked and swept once the importing
+// suite finishes, so a full test run leaves no wa-* rubble on /tmp. A full
+// tmpfs previously produced a false 152-failure run (zero-byte lcov files),
+// so suites that only need a scratch DB import tmpdir() from here instead of
+// calling mkdtempSync directly. Verified: a top-level after() hook registered
+// in an imported module does attach to the importing test process.
+const tmpDirs = new Set();
+after(() => {
+  for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true });
+  tmpDirs.clear();
+});
+
 export function tmpdir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'wa-test-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-test-'));
+  tmpDirs.add(dir);
+  return dir;
 }
 
 let booted = null;
