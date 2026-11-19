@@ -30,7 +30,8 @@
     "src",
     "public",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "COMMERCIAL-LICENSE.md"
   ],
   "dependencies": {
     "ua-parser-js": "^1.0.39"

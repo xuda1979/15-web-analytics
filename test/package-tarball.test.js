@@ -1,7 +1,8 @@
 // npm tarball allowlist test: bf7bf2e restricted the publish surface to
-// src, public, README.md and LICENSE (the `files` field in package.json) so
-// an npm publish can never leak the test/ tree or the software-copyright
-// filing directory (15-web-analytics-软件著作权申请, ~128 kB of 源代码.txt).
+// src, public, README.md, LICENSE (and later COMMERCIAL-LICENSE.md) — the
+// `files` field in package.json — so an npm publish can never leak the
+// test/ tree or the software-copyright filing directory
+// (15-web-analytics-软件著作权申请, ~128 kB of 源代码.txt).
 //
 // This test is the regression guard for that guarantee. `npm pack` is the
 // single source of truth for what would ship (it honors .npmignore and the
@@ -39,6 +40,7 @@ test('npm pack ships exactly the allowlisted files and nothing else', () => {
     assert.deepEqual(
       files,
       [
+        'COMMERCIAL-LICENSE.md',
         'LICENSE',
         'README.md',
         'package.json',
@@ -71,6 +73,10 @@ test('npm pack ships exactly the allowlisted files and nothing else', () => {
     );
     assert.ok(!files.includes('SPEC.md'), 'the internal spec never ships');
     assert.ok(files.includes('LICENSE'), 'the AGPL license text always ships (LICENSE is in the files allowlist)');
+    assert.ok(
+      files.includes('COMMERCIAL-LICENSE.md'),
+      'the commercial-authorization terms ship alongside the AGPL text (the README License section and Dockerfile reference them)',
+    );
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
