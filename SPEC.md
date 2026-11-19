@@ -38,14 +38,27 @@ Plausible / Fathom（隐私分析细分）的国内合规版：去 Cookie、无�
 ## 低算力守则
 见全局（中间轻量：批量 + SQLite 聚合杯是本地重活）。
 
-## AC
+## AC（均已交付，验收测试见 test/acceptance.test.js）
 1. snippet 加载后，访问计数出现在实时视图（<1s 延迟）
+   → 已交付：`real-time view reflects a new pageview quickly (<1s)`（L77）
 2. 去 Cookie：页面无 set-cookie（断言在 fixture 部署上）
+   → 已交付：`no Set-Cookie on ANY route`（L30）
 3. 独立访客 heuristic 工作（模拟 2 用户多页面）
+   → 已交付：`unique-visitor heuristic: 2 distinct visitors over multiple pages`（L95）
 4. 聚合视图（日/周）计算正确（对 fixture 数据验证）
+   → 已交付：`daily and weekly aggregation are correct on fixture data`（L162；月视图并入聚合链路）
 5. 报表导出 CSV/JSON
+   → 已交付：`CSV and JSON export work and IP is redacted/null`（L761）
 6. 审计报告可生成（数据流说明）
+   → 已交付：`privacy audit report generates and flags posture`（L782）
 7. 测试（含 privacy fixture 断言）+ README
+   → 已交付：249 测试全绿（模块 + in-process server 双套件）；README 文档齐备
+
+## 技术栈（已定稿）
+- Node v22（server + 前端）；内置 `node:sqlite`（DatabaseSync，WAL，busy_timeout=5000）
+- 存储：SQLite（`events` 主表 + 聚合缓存表 `agg_daily_realtime` / `agg_monthly_buckets`）
+- ua 解析：ua-parser-js（本地解析，无外部调用）
+- 部署：Docker（node:22-alpine，单进程容器，`/data` 卷）
 
 ## Phases
 - P0: collect + SQLite + 计数核心
